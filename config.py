@@ -1,5 +1,6 @@
 # config.py
 """Configuration simple pour le système RAG."""
+
 import os
 from dotenv import load_dotenv
 
@@ -8,7 +9,7 @@ load_dotenv()
 # ============================================================================
 # API
 # ============================================================================
-ALBERT_API_KEY = os.getenv('ALBERT_API_KEY', '')
+ALBERT_API_KEY = os.getenv("ALBERT_API_KEY", "")
 ALBERT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
 
 # ============================================================================
@@ -25,7 +26,7 @@ EMBEDDINGS_CONFIG = {
     "encoding_format": "float",
     "chunk_size": 50,
     "max_retries": 3,
-    "request_timeout": 60
+    "request_timeout": 60,
 }
 
 # ============================================================================
@@ -49,8 +50,8 @@ COLLECTION_NAME = "documents_rag"
 BATCH_SIZE = 50
 RETRIEVER_TOP_K = 30
 
-SUPPORTED_EXTENSIONS = ['.pdf', '.docx', '.odt', '.txt', '.md', '.html', '.htm']
-TEXT_ENCODINGS = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+SUPPORTED_EXTENSIONS = [".pdf", ".docx", ".odt", ".txt", ".md", ".html", ".htm"]
+TEXT_ENCODINGS = ["utf-8", "latin-1", "cp1252", "iso-8859-1"]
 
 # ============================================================================
 # RAG PIPELINE
@@ -71,7 +72,9 @@ VERBOSE = True
 # ==================== CONFIGURATION DES PROMPTS ====================
 
 # Mode de réponse (administratif, technique, créatif)
-PROMPT_MODE = os.getenv("PROMPT_MODE", "administratif")  # administratif | technique | créatif
+PROMPT_MODE = os.getenv(
+    "PROMPT_MODE", "administratif"
+)  # administratif | technique | créatif
 
 # Templates de prompts par mode
 PROMPT_TEMPLATES = {
@@ -79,7 +82,6 @@ PROMPT_TEMPLATES = {
         "system": """Tu es un assistant IA spécialisé dans l'aide aux administrations publiques françaises.
 Tu dois fournir des réponses précises, factuelles et conformes aux réglementations en vigueur.
 Utilise un ton formel et professionnel. Cite systématiquement tes sources.""",
-        
         "rag": """Contexte réglementaire et documentaire :
 {context}
 
@@ -94,19 +96,16 @@ Instructions :
 - Utilise un vocabulaire administratif précis
 
 Réponse :""",
-
         "hyde": """En tant qu'expert en administration publique française, rédige un document de référence détaillé qui répondrait à la question suivante :
 
 Question : {query}
 
-Document de référence (format administratif formel) :"""
+Document de référence (format administratif formel) :""",
     },
-    
     "technique": {
         "system": """Tu es un assistant technique spécialisé dans l'analyse de documents et procédures.
 Tu dois fournir des réponses détaillées avec des explications techniques précises.
 Structure tes réponses avec des listes, étapes et exemples concrets.""",
-        
         "rag": """Documentation technique disponible :
 {context}
 
@@ -121,18 +120,15 @@ Instructions :
 - Cite les sources [nom_du_document]
 
 Réponse technique :""",
-
         "hyde": """En tant qu'expert technique, crée une documentation détaillée avec procédures et exemples pour répondre à cette question :
 
 Question : {query}
 
-Documentation technique complète :"""
+Documentation technique complète :""",
     },
-    
     "créatif": {
         "system": """Tu es un assistant créatif et pédagogique qui rend l'information accessible et engageante.
 Tu utilises des analogies, des exemples concrets et un ton convivial tout en restant précis.""",
-        
         "rag": """Informations disponibles :
 {context}
 
@@ -147,13 +143,12 @@ Instructions :
 - Mentionne tes sources [nom_du_document]
 
 Réponse :""",
-
         "hyde": """Imagine une explication détaillée et pédagogique qui répondrait parfaitement à cette question :
 
 Question : {query}
 
-Explication complète et accessible :"""
-    }
+Explication complète et accessible :""",
+    },
 }
 
 # Prompt personnalisé (si défini, remplace le mode)
@@ -163,14 +158,15 @@ CUSTOM_SYSTEM_PROMPT = os.getenv("CUSTOM_SYSTEM_PROMPT", None)
 
 # ==================== FONCTIONS UTILITAIRES ====================
 
+
 def get_prompt_template(prompt_type: str = "rag", mode: str = None) -> str:
     """
     Récupère le template de prompt selon le type et le mode.
-    
+
     Args:
         prompt_type: 'rag', 'hyde', ou 'system'
         mode: 'administratif', 'technique', 'créatif' (ou None pour utiliser PROMPT_MODE)
-    
+
     Returns:
         str: Template de prompt
     """
@@ -181,21 +177,22 @@ def get_prompt_template(prompt_type: str = "rag", mode: str = None) -> str:
         return CUSTOM_HYDE_PROMPT
     elif prompt_type == "system" and CUSTOM_SYSTEM_PROMPT:
         return CUSTOM_SYSTEM_PROMPT
-    
+
     # Sinon utiliser le mode
     mode = mode or PROMPT_MODE
-    
+
     if mode not in PROMPT_TEMPLATES:
         if VERBOSE:
             print(f"⚠️ Mode '{mode}' inconnu, utilisation du mode 'administratif'")
         mode = "administratif"
-    
+
     return PROMPT_TEMPLATES[mode].get(prompt_type, "")
+
 
 def set_prompt_mode(mode: str):
     """
     Change le mode de prompt.
-    
+
     Args:
         mode: 'administratif', 'technique', ou 'créatif'
     """
@@ -206,6 +203,7 @@ def set_prompt_mode(mode: str):
             print(f"✅ Mode de prompt changé : {mode}")
     else:
         print(f"❌ Mode invalide. Modes disponibles : {list(PROMPT_TEMPLATES.keys())}")
+
 
 def list_prompt_modes():
     """Liste tous les modes de prompts disponibles."""

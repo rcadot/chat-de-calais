@@ -6,3 +6,30 @@ documents/Note ZAN.docx
 documents/Note ZAN.odt
 documents/note_Préfet situation PDCH.odt
 documents/Note_prefet_assainissement_conformité_2022 VOM.odt
+chroma_db_rag/chroma.sqlite3
+chroma_db_rag/index_metadata.json
+chroma_db_rag/cc73747e-8b19-4f92-91f3-670aaf3100b8/data_level0.bin
+chroma_db_rag/cc73747e-8b19-4f92-91f3-670aaf3100b8/header.bin
+chroma_db_rag/cc73747e-8b19-4f92-91f3-670aaf3100b8/length.bin
+chroma_db_rag/cc73747e-8b19-4f92-91f3-670aaf3100b8/link_lists.bin
+__pycache__/albert_client.cpython-311.pyc
+__pycache__/albert_client.cpython-313.pyc
+__pycache__/config.cpython-311.pyc
+__pycache__/config.cpython-313.pyc
+__pycache__/indexer.cpython-313.pyc
+__pycache__/loaders.cpython-313.pyc
+__pycache__/logger.cpython-313.pyc
+__pycache__/rag_pipeline.cpython-313.pyc
+__pycache__/temp_documents.cpython-313.pyc
+__pycache__/utils_app.cpython-313.pyc
+tests/__pycache__/conftest.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_config.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_indexer.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_integration.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_loaders.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_logger.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_prompts.cpython-313-pytest-9.0.1.pyc
+tests/__pycache__/test_rag_pipeline.cpython-313-pytest-9.0.1.pyc
+.env
+coverage.xml
+coverage.xml
