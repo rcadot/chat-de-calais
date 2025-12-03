@@ -1,0 +1,622 @@
+---
+title: "Documentation Technique - Chat de Calais"
+subtitle: "Système RAG avec HyDE et Reranking ALBERT"
+author: "Documentation Projet"
+date: today
+format:
+  html:
+    code-overflow: scroll
+    code-fold: false
+    code-link: false
+    toc: true
+    toc-location: right
+    toc-title: Sommaire
+    embed-resources: true
+    anchor-sections: true
+    smooth-scroll: true
+    theme: flatly
+    number-sections: true
+---
+
+# Vue d'ensemble du projet
+
+**Chat de Calais** est un système de Retrieval-Augmented Generation (RAG) permettant d'interroger une base documentaire à l'aide d'intelligence artificielle. Le système utilise les modèles ALBERT (API Etalab) pour les embeddings, la génération de texte et le reranking.
+
+## Architecture générale
+
+Le système est composé de plusieurs modules indépendants :
+
+- **Indexation** : Chargement et vectorisation incrémentale des documents
+- **Pipeline RAG** : HyDE + Retrieval + Reranking + Génération
+- **Applications** : Interface de chat Streamlit et dashboard de logs
+- **Logging** : Traçabilité complète des requêtes et feedbacks utilisateurs
+- **Gestion documentaire** : Support de documents permanents et temporaires
+
+## Technologies utilisées
+
+- **LangChain** : Framework RAG et chaining de modèles
+- **ChromaDB** : Base vectorielle persistante
+- **Streamlit** : Interface web interactive
+- **SQLite** : Base de données de logs
+- **ALBERT API** : Modèles d'embeddings, LLM et reranking
+- **Plotly** : Visualisations interactives
+
+---
+
+# Configuration (`config.py`)
+
+Le fichier `config.py` centralise tous les paramètres du système.
+
+## Paramètres API
+
+```python
+ALBERT_API_KEY = os.getenv("ALBERT_API_KEY", "")
+ALBERT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
+
+# Modèles utilisés
+EMBEDDINGS_MODEL = "embeddings-small"
+LLM_MODEL = "albert-large"
+RERANK_MODEL = "rerank-small"
+```
+
+## Chunking des documents
+
+```python
+CHUNK_SIZE = 2000              # Taille des chunks en caractères
+CHUNK_OVERLAP = 400            # Chevauchement entre chunks
+CHUNK_SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
+```
+
+## Pipeline RAG
+
+```python
+RAG_TOP_K_DOCS = 5             # Nombre de documents finaux utilisés
+RAG_TOP_N_RETRIEVAL = 30       # Nombre de documents récupérés
+USE_HYDE = True                # Activer HyDE (Hypothetical Document Embeddings)
+USE_RERANK = True              # Activer le reranking ALBERT
+```
+
+## Modes de prompt
+
+Le système propose 3 modes de réponse configurables :
+
+| Mode | Description | Usage |
+|------|-------------|-------|
+| **Administratif** | Réponses formelles, ton réglementaire, citations précises | Administrations publiques |
+| **Technique** | Réponses détaillées avec procédures et exemples | Documentation technique |
+| **Créatif** | Réponses pédagogiques avec analogies | Vulgarisation |
+
+Chaque mode dispose de templates personnalisés pour HyDE et RAG.
+
+---
+
+# Indexation des documents
+
+## Module `loaders.py`
+
+Le module `loaders.py` gère le chargement de multiples formats :
+
+```python
+SUPPORTED_EXTENSIONS = [".pdf", ".docx", ".odt", ".txt", 
+                        ".md", ".html", ".htm"]
+```
+
+### Fonction principale
+
+```python
+def load_document(file_path: str) -> List[Document]:
+    """Charge un document selon son extension"""
+    ext = Path(file_path).suffix.lower()
+
+    if ext == '.pdf':
+        return PyPDFLoader(file_path).load()
+    elif ext == '.docx':
+        return Docx2txtLoader(file_path).load()
+    elif ext in ['.txt', '.text']:
+        # Gestion multi-encodage
+        for encoding in config.TEXT_ENCODINGS:
+            try:
+                return TextLoader(file_path, encoding=encoding).load()
+            except:
+                continue
+    # ... autres formats
+```
+
+## Module `indexer.py`
+
+L'indexeur implémente une **indexation incrémentale** basée sur les hash MD5 des fichiers.
+
+### Processus d'indexation
+
+1. **Scan du dossier** `./documents`
+2. **Calcul des hash MD5** pour chaque fichier
+3. **Détection des changements** (nouveaux, modifiés, supprimés)
+4. **Mise à jour incrémentale** de ChromaDB
+5. **Sauvegarde des métadonnées** dans `index_metadata.json`
+
+### Fonction clé
+
+```python
+def index_documents(embeddings):
+    """Indexation incrémentale des documents"""
+
+    # Charger métadonnées existantes
+    old_files = load_metadata()
+
+    # Scanner documents actuels
+    current_files = scan_documents()
+
+    # Détecter changements
+    new, modified, deleted, unchanged = detect_changes(
+        old_files, current_files
+    )
+
+    # Supprimer chunks obsolètes
+    for file_path in deleted + modified:
+        collection.delete(where={"source": file_path})
+
+    # Indexer nouveaux/modifiés
+    files_to_index = new + modified
+    for file_path in files_to_index:
+        docs = load_document(file_path)
+        chunks = splitter.split_documents(docs)
+        vectorstore.add_documents(chunks)
+
+    return vectorstore, retriever
+```
+
+### Base de données ChromaDB
+
+- **Chemin** : `./chroma_db_rag`
+- **Collection** : `documents_rag`
+- **Persistence** : Disque (SQLite + parquet)
+- **Métadonnées** : source, page, timestamp
+
+---
+
+# Pipeline RAG (`rag_pipeline.py`)
+
+Le pipeline RAG implémente une approche en 4 étapes.
+
+## Architecture du pipeline
+
+```{mermaid}
+graph LR
+    A[Question] --> B[HyDE]
+    B --> C[Retrieval 30 docs]
+    C --> D[Reranking Top 5]
+    D --> E[Génération LLM]
+    E --> F[Réponse]
+```
+
+## Étape 1 : HyDE (Hypothetical Document Embeddings)
+
+HyDE génère un document hypothétique répondant à la question, ce qui améliore la qualité du retrieval.
+
+```python
+def generate_hyde(query: str, llm) -> str:
+    """Génère un document hypothétique avec HyDE"""
+
+    # Utiliser le template HyDE du mode configuré
+    hyde_template = config.get_prompt_template("hyde")
+    hyde_prompt = PromptTemplate.from_template(hyde_template)
+
+    chain = hyde_prompt | llm | StrOutputParser()
+    hyde_doc = chain.invoke({"query": query})
+
+    # Combiner query + document hypothétique
+    enhanced_query = f"{query}\n\n{hyde_doc}"
+
+    return enhanced_query
+```
+
+### Exemple de prompt HyDE (mode administratif)
+
+> *"En tant qu'expert en administration publique française, rédige un document de référence détaillé qui répondrait à la question suivante : [QUESTION]"*
+
+## Étape 2 : Retrieval
+
+Récupération des 30 documents les plus similaires via ChromaDB.
+
+```python
+docs_initial = retriever.invoke(hyde_query)
+```
+
+## Étape 3 : Reranking ALBERT
+
+Le reranking utilise l'API ALBERT pour affiner la pertinence.
+
+```python
+def rerank_documents(query: str, docs: List, top_k: int = 5) -> List:
+    """Rerank avec ALBERT API"""
+
+    # Préparer les documents
+    doc_texts = [doc.page_content[:1000] for doc in docs]
+
+    payload = {
+        "model": config.RERANK_MODEL,
+        "prompt": query,
+        "input": doc_texts,
+    }
+
+    response = requests.post(
+        f"{config.ALBERT_BASE_URL}/rerank",
+        json=payload,
+        headers=headers
+    )
+
+    # Parser et stocker les scores
+    results = response.json()
+    reranked_docs = []
+    for r in sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]:
+        doc = docs[r["index"]]
+        doc.metadata["rerank_score"] = r["score"]
+        reranked_docs.append(doc)
+
+    return reranked_docs
+```
+
+## Étape 4 : Génération
+
+Génération de la réponse finale avec le LLM.
+
+```python
+def rag_query(query: str, retriever, llm, mode: str = None):
+    """Exécute une requête RAG complète"""
+
+    # HyDE
+    hyde_query = generate_hyde(query, llm)
+
+    # Retrieval
+    docs_initial = retriever.invoke(hyde_query)
+
+    # Rerank
+    docs_final = rerank_documents(query, docs_initial, top_k=5)
+
+    # Génération
+    context = "\n\n".join([d.page_content for d in docs_final])
+    rag_template = config.get_prompt_template("rag", mode=mode)
+    rag_prompt = PromptTemplate.from_template(rag_template)
+
+    chain = rag_prompt | llm | StrOutputParser()
+    answer = chain.invoke({"context": context, "query": query})
+
+    return {
+        "answer": answer,
+        "sources": [d.metadata["source"] for d in docs_final],
+        "rerank_scores": [d.metadata["rerank_score"] for d in docs_final]
+    }
+```
+
+## Streaming
+
+La fonction `rag_query_stream` permet un streaming des tokens pour l'UI :
+
+```python
+def rag_query_stream(query: str, retriever, llm, mode: str = None):
+    """RAG avec streaming"""
+    # ... pipeline RAG ...
+
+    # Stream les chunks
+    for chunk in chain.stream({"context": context, "query": query}):
+        yield {"type": "chunk", "content": chunk.content}
+
+    # Yielder métadonnées à la fin
+    yield {
+        "type": "metadata",
+        "sources": sources,
+        "rerank_scores": scores,
+        # ...
+    }
+```
+
+---
+
+# Applications Streamlit
+
+## Application de chat (`app_chat.py`)
+
+Interface principale pour interagir avec le système RAG.
+
+### Fonctionnalités
+
+- **Chat interactif** avec historique de conversation
+- **Modes de prompt** : Administratif, Technique, Créatif
+- **Documents temporaires** : Upload de documents pour la session
+- **Feedback utilisateur** : Thumbs up/down sur chaque réponse
+- **Sources collapsibles** : Affichage des documents consultés
+- **Copie de réponses** : Bouton de copie pour chaque message
+- **Mode développement** : Test sans appel API
+
+### Architecture de l'application
+
+```python
+# Initialisation (cache)
+@st.cache_resource
+def init_rag_system():
+    embeddings = get_embeddings()
+    llm = get_llm()
+    logger = RAGLogger(config.RAG_LOGS_DB)
+    vectorstore, retriever = index_documents(embeddings)
+    return retriever, llm, logger
+
+# Configuration de la page
+st.set_page_config(
+    page_title="Chat-de-Calais",
+    page_icon="🐈",
+    layout="wide"
+)
+```
+
+### Gestion du feedback
+
+Le système enregistre les feedbacks utilisateurs (👍/👎) :
+
+```python
+# Traiter le feedback en attente
+if st.session_state.pending_feedback:
+    query_id, feedback_type = st.session_state.pending_feedback
+    if logger.update_feedback(query_id, feedback_type):
+        st.session_state.feedbacks_given.add(f"feedback_{query_id}")
+        st.toast(f"✅ Merci pour votre retour !", icon=emoji)
+        st.session_state.pending_feedback = None
+        st.rerun()
+```
+
+### Documents temporaires
+
+Module `temp_documents.py` permettant l'ajout de documents à la volée :
+
+```python
+def add_temp_documents(uploaded_files, embeddings):
+    """Ajoute des documents temporaires et réindexe"""
+
+    # Sauvegarder retriever original
+    if st.session_state.original_retriever is None:
+        st.session_state.original_retriever = st.session_state.retriever
+
+    # Charger nouveaux documents
+    for uploaded_file in uploaded_files:
+        doc_entry = load_and_store_document(uploaded_file)
+        st.session_state.temp_documents.append(doc_entry)
+
+    # Créer retriever temporaire
+    temp_retriever = create_temp_retriever(embeddings)
+    st.session_state.retriever = temp_retriever
+```
+
+## Dashboard de logs (`app_logs.py`)
+
+Dashboard de visualisation et analyse des logs RAG.
+
+### Métriques principales
+
+- Total de requêtes
+- Taux de succès
+- Temps d'exécution moyen
+- Documents moyens utilisés
+- Score de reranking moyen
+- **Taux de feedback** (👍/👎)
+- **Satisfaction utilisateur**
+
+### Visualisations
+
+1. **Répartition des feedbacks** (camembert)
+2. **Feedbacks par mode de prompt** (bar chart)
+3. **Évolution temporelle** des requêtes
+4. **Distribution des modes** utilisés
+5. **Temps d'exécution** par mode (box plot)
+6. **Distribution des scores** de reranking
+7. **Top sources** les plus utilisées
+
+### Filtres disponibles
+
+- Période (dernière heure, jour, 7j, 30j, tout)
+- Status (succès/erreurs)
+- Modes de prompt
+- **Feedback utilisateur** (positif/négatif/sans)
+
+---
+
+# Base de données de logs (`logger.py`)
+
+## Schéma SQLite
+
+La table `rag_queries` stocke toutes les informations du pipeline :
+
+```sql
+CREATE TABLE rag_queries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    user_query TEXT NOT NULL,
+    hyde_query TEXT,
+    retrieved_docs_count INTEGER,
+    reranked_docs_count INTEGER,
+    final_answer TEXT,
+    sources TEXT,                    -- JSON array
+    rerank_scores TEXT,              -- JSON array
+    execution_time_seconds REAL,
+    error TEXT,
+    retrieved_docs_details TEXT,     -- JSON (premiers docs)
+    reranked_docs_details TEXT,      -- JSON (docs finaux)
+    prompt_mode TEXT,
+    user_feedback TEXT,              -- 'thumbs_up' ou 'thumbs_down'
+    feedback_timestamp TEXT
+);
+```
+
+## Classe RAGLogger
+
+```python
+class RAGLogger:
+    def log_query(self, user_query, hyde_query, retrieved_docs, 
+                  reranked_docs, final_answer, sources, 
+                  rerank_scores, execution_time, error, 
+                  prompt_mode) -> int:
+        """Log une requête RAG complète"""
+        # Insert dans SQLite
+        # Retourne query_id
+
+    def update_feedback(self, query_id: int, feedback: str) -> bool:
+        """Met à jour le feedback utilisateur"""
+        # UPDATE user_feedback
+
+    def get_stats(self) -> dict:
+        """Calcule les statistiques globales"""
+        # Agrégations SQL
+```
+
+## Traçabilité complète
+
+Chaque requête enregistre :
+
+- Question originale et query HyDE
+- Nombre de documents à chaque étape
+- Détails des documents (source + extrait)
+- Scores de reranking
+- Réponse finale générée
+- Temps d'exécution
+- Erreurs éventuelles
+- Mode de prompt utilisé
+- **Feedback utilisateur avec timestamp**
+
+---
+
+# Utilitaires
+
+## Client ALBERT (`albert_client.py`)
+
+Wrapper pour l'API ALBERT :
+
+```python
+def get_embeddings():
+    """Client embeddings ALBERT"""
+    return OpenAIEmbeddings(
+        model=config.EMBEDDINGS_MODEL,
+        api_key=config.ALBERT_API_KEY,
+        base_url=config.ALBERT_BASE_URL,
+        **config.EMBEDDINGS_CONFIG
+    )
+
+def get_llm():
+    """Client LLM ALBERT"""
+    return ChatOpenAI(
+        model=config.LLM_MODEL,
+        api_key=config.ALBERT_API_KEY,
+        base_url=config.ALBERT_BASE_URL,
+        temperature=config.LLM_TEMPERATURE,
+    )
+```
+
+## Formatage de sources (`utils_app.py`)
+
+```python
+def format_sources(sources: List[str], scores: List[float]) -> str:
+    """Formate les sources en HTML pour affichage"""
+    html = "<div style='font-size: 0.9em;'>"
+    for i, (src, score) in enumerate(zip(sources, scores), 1):
+        source_name = Path(src).name
+        score_str = f"<b>[{score:.3f}]</b>" if score else ""
+        html += f"<p>{i}. {score_str} {source_name}</p>"
+    html += "</div>"
+    return html
+```
+
+## Visualisation CLI (`view_logs.py`)
+
+Script CLI pour consulter les logs sans interface web :
+
+```bash
+# Voir les dernières requêtes
+python view_logs.py recent --limit 10
+
+# Détail d'une requête
+python view_logs.py detail 42
+
+# Statistiques globales
+python view_logs.py stats
+
+# Recherche
+python view_logs.py search "urbanisme" --limit 5
+```
+
+---
+
+# Déploiement
+
+## Installation
+
+```bash
+# Créer environnement
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+# Installer dépendances
+pip install -r requirements.txt
+```
+
+## Configuration
+
+Créer un fichier `.env` :
+
+```bash
+ALBERT_API_KEY=votre_clé_api
+PROMPT_MODE=administratif
+```
+
+## Lancement
+
+```bash
+# Indexer les documents
+python main.py
+
+# Lancer l'application de chat
+streamlit run app_chat.py
+
+# Lancer le dashboard de logs
+streamlit run app_logs.py
+```
+
+## Structure des dossiers
+
+```
+chat-de-calais/
+├── config.py                 # Configuration centralisée
+├── albert_client.py          # Client API ALBERT
+├── loaders.py                # Chargeurs de documents
+├── indexer.py                # Indexation incrémentale
+├── rag_pipeline.py           # Pipeline RAG principal
+├── logger.py                 # Logging SQLite
+├── app_chat.py               # Application chat Streamlit
+├── app_logs.py               # Dashboard logs Streamlit
+├── temp_documents.py         # Gestion docs temporaires
+├── utils_app.py              # Utilitaires UI
+├── view_logs.py              # CLI de logs
+├── main.py                   # Script d'indexation
+├── requirements.txt          # Dépendances Python
+├── documents/                # Dossier documents à indexer
+├── chroma_db_rag/            # Base vectorielle ChromaDB
+└── rag_logs.db               # Base de logs SQLite
+```
+
+
+
+---
+
+# Annexes
+
+## Bibliographie
+
+- [ALBERT API Documentation](https://albert.api.etalab.gouv.fr/)
+- [LangChain Documentation](https://python.langchain.com/)
+- [HyDE Paper (Gao et al. 2022)](https://arxiv.org/abs/2212.10496)
+- [Streamlit Documentation](https://docs.streamlit.io/)
+
+## Licence
+
+https://www.cerema.fr/fr/presse/document/conditions-generales-intervention-du-cerema
+
+## Contact
+
+Pour toute question : [romain.cadot@cerema.fr]

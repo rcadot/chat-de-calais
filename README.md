@@ -1,93 +1,308 @@
-# chat-de-calais
+# 🐈 Chat de Calais
 
+> Système de Retrieval-Augmented Generation (RAG) avancé avec HyDE et Reranking ALBERT
 
+Un système RAG intelligent permettant d'interroger une base documentaire à l'aide de l'intelligence artificielle, optimisé pour les administrations publiques françaises.
 
-## Getting started
+## ✨ Fonctionnalités
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+### 🤖 Pipeline RAG Avancé
+- **HyDE (Hypothetical Document Embeddings)** : Amélioration du retrieval via génération de documents hypothétiques
+- **Retrieval Vectoriel** : Recherche sémantique dans ChromaDB
+- **Reranking ALBERT** : Affinage de la pertinence avec l'API Etalab
+- **Génération LLM** : Réponses contextualisées avec streaming
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### 🎭 3 Modes de Prompt
+- **Administratif** : Ton formel et réglementaire pour les contextes officiels
+- **Technique** : Réponses détaillées avec procédures et exemples
+- **Créatif** : Vulgarisation pédagogique avec analogies
 
-## Add your files
+### 📚 Gestion Documentaire
+- **Indexation incrémentale** : Détection automatique des changements (hash MD5)
+- **Multi-format** : PDF, DOCX, ODT, TXT, MD, HTML
+- **Documents temporaires** : Upload à la volée pour une session
+- **Chunking intelligent** : Découpage optimisé avec chevauchement
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### 💬 Feedback & Analytics
+- **Feedback utilisateur** : Système de thumbs up/down
+- **Dashboard interactif** : Visualisations avec Plotly
+- **Logging complet** : Traçabilité de toutes les requêtes
+- **Métriques de performance** : Temps, scores, satisfaction
+
+## 🏗️ Architecture
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.cerema.fr/romain.cadot/chat-de-calais.git
-git branch -M main
-git push -uf origin main
+┌─────────────┐
+│   Question  │
+└──────┬──────┘
+       │
+       v
+┌─────────────────┐
+│  1. HyDE        │  Génération document hypothétique
+│  (LLM ALBERT)   │
+└──────┬──────────┘
+       │
+       v
+┌─────────────────┐
+│  2. Retrieval   │  Top 30 documents similaires
+│  (ChromaDB)     │
+└──────┬──────────┘
+       │
+       v
+┌─────────────────┐
+│  3. Reranking   │  Affinage → Top 5 documents
+│  (ALBERT API)   │
+└──────┬──────────┘
+       │
+       v
+┌─────────────────┐
+│  4. Génération  │  Réponse finale avec contexte
+│  (LLM ALBERT)   │
+└──────┬──────────┘
+       │
+       v
+┌─────────────────┐
+│    Réponse      │ + Sources + Scores
+└─────────────────┘
 ```
 
-## Integrate with your tools
+## 🚀 Installation
 
-- [ ] [Set up project integrations](https://gitlab.cerema.fr/romain.cadot/chat-de-calais/-/settings/integrations)
+### Prérequis
 
-## Collaborate with your team
+- Python 3.10+
+- Clé API ALBERT (https://albert.api.etalab.gouv.fr/)
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### Installation des dépendances
 
-## Test and Deploy
+```bash
+# Cloner le repository
+git clone https://gitlab.cerema.fr/romain.cadot/chat-de-calais.git
+cd chat-de-calais
 
-Use the built-in continuous integration in GitLab.
+# Créer un environnement virtuel
+python -m venv venv
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+# Activer l'environnement
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 
-***
+# Installer les dépendances
+pip install -r requirements.txt
+```
 
-# Editing this README
+### Configuration
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Créer un fichier `.env` à la racine du projet :
 
-## Suggestions for a good README
+```bash
+# API ALBERT
+ALBERT_API_KEY=votre_clé_api_ici
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+# Mode de prompt par défaut (administratif | technique | créatif)
+PROMPT_MODE=administratif
+```
 
-## Name
-Choose a self-explaining name for your project.
+## 📖 Utilisation
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### 1. Indexer les documents
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Placer vos documents dans le dossier `./documents/` puis lancer :
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+```bash
+python main.py
+```
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+L'indexation est **incrémentale** : seuls les fichiers nouveaux ou modifiés seront traités.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### 2. Lancer l'application de chat
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+```bash
+streamlit run app_chat.py
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Accéder à l'interface : http://localhost:8501
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+**Fonctionnalités de l'interface :**
+- Chat interactif avec historique
+- Sélection du mode de prompt
+- Upload de documents temporaires
+- Feedback sur les réponses (👍/👎)
+- Sources consultées avec scores
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+### 3. Lancer le dashboard analytics
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+```bash
+streamlit run app_logs.py
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Accéder au dashboard : http://localhost:8502
 
-## License
-For open source projects, say how it is licensed.
+**Métriques disponibles :**
+- Nombre de requêtes et taux de succès
+- Temps d'exécution moyen
+- Distribution des modes de prompt
+- Feedbacks utilisateurs et satisfaction
+- Top sources consultées
+- Évolution temporelle
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+### 4. Consulter les logs (CLI)
+
+```bash
+# Voir les dernières requêtes
+python view_logs.py recent --limit 10
+
+# Détail d'une requête spécifique
+python view_logs.py detail 42
+
+# Statistiques globales
+python view_logs.py stats
+
+# Recherche dans les logs
+python view_logs.py search "urbanisme" --limit 5
+```
+
+## ⚙️ Configuration
+
+Tous les paramètres sont centralisés dans `config.py` :
+
+### API & Modèles
+
+```python
+EMBEDDINGS_MODEL = "embeddings-small"    # Modèle d'embeddings
+LLM_MODEL = "albert-large"               # Modèle de génération
+RERANK_MODEL = "rerank-small"            # Modèle de reranking
+```
+
+### Pipeline RAG
+
+```python
+USE_HYDE = True                          # Activer HyDE
+USE_RERANK = True                        # Activer le reranking
+RAG_TOP_K_DOCS = 5                       # Nombre de docs finaux
+RAG_TOP_N_RETRIEVAL = 30                 # Nombre de docs récupérés
+```
+
+### Chunking
+
+```python
+CHUNK_SIZE = 2000                        # Taille des chunks
+CHUNK_OVERLAP = 400                      # Chevauchement
+CHUNK_SEPARATORS = ["\n\n", "\n", ". "]  # Séparateurs
+```
+
+### Prompts personnalisés
+
+Modifier les templates dans `PROMPT_TEMPLATES` pour personnaliser les réponses par mode.
+
+## 📁 Structure du projet
+
+```
+chat-de-calais/
+├── 📄 config.py                  # Configuration centralisée
+├── 🔌 albert_client.py           # Client API ALBERT
+├── 📚 loaders.py                 # Chargeurs multi-formats
+├── 🔍 indexer.py                 # Indexation incrémentale ChromaDB
+├── 🤖 rag_pipeline.py            # Pipeline RAG (HyDE + Rerank)
+├── 📝 logger.py                  # Logging SQLite
+│
+├── 🖥️  Applications Streamlit
+│   ├── app_chat.py               # Interface de chat
+│   ├── app_logs.py               # Dashboard analytics
+│   ├── temp_documents.py         # Gestion docs temporaires
+│   └── utils_app.py              # Utilitaires UI
+│
+├── 🛠️  Scripts utilitaires
+│   ├── main.py                   # Script d'indexation
+│   ├── view_logs.py              # CLI de consultation logs
+│   └── generate_mock_logs.py     # Génération de logs de test
+│
+├── 📖 Documentation
+│   ├── README.md                 # Ce fichier
+│   ├── docs.qmd                  # Documentation technique Quarto
+│   ├── exemple_pipeline.ipynb    # Notebook de démonstration
+│   └── requirements.txt          # Dépendances Python
+│
+└── 🗄️  Données (générées)
+    ├── documents/                # Documents à indexer
+    ├── chroma_db_rag/            # Base vectorielle
+    └── rag_logs.db               # Base de logs SQLite
+```
+
+## 🔧 Technologies utilisées
+
+| Catégorie | Technologies |
+|-----------|-------------|
+| **Framework RAG** | LangChain |
+| **Base vectorielle** | ChromaDB |
+| **LLM & Embeddings** | ALBERT (API Etalab) |
+| **Interface Web** | Streamlit |
+| **Base de données** | SQLite |
+| **Visualisations** | Plotly |
+| **Chargeurs documents** | PyPDF, Docx2txt, Unstructured |
+
+## 📊 Exemple de requête
+
+### Question
+> "Quelles sont les règles d'urbanisme pour construire une extension de maison ?"
+
+### Pipeline (mode technique)
+
+1. **HyDE** génère un document hypothétique sur les règles d'urbanisme
+2. **Retrieval** récupère 30 documents pertinents via embeddings
+3. **Reranking** sélectionne les 5 documents les plus pertinents (scores : 0.92, 0.89, 0.85, 0.82, 0.78)
+4. **Génération** produit une réponse structurée avec sources
+
+### Résultat
+
+```
+Pour construire une extension de maison, vous devez respecter plusieurs règles :
+
+1. Déclaration préalable de travaux
+   - Si surface < 20m² (40m² en zone urbaine PLU)
+   - Formulaire Cerfa 13703
+
+2. Permis de construire
+   - Si surface > 20m² (40m² en zone urbaine)
+   - Délai d'instruction : 2 mois
+
+3. Règles d'urbanisme locales
+   - Consulter le PLU de votre commune
+   - Respect des distances par rapport aux limites
+   - Hauteur maximale autorisée
+
+📚 Sources consultées:
+[0.920] Guide_urbanisme_2024.pdf
+[0.890] PLU_extensions_habitations.pdf
+[0.850] Procedures_declaratives.pdf
+```
+
+## 🧪 Tests
+
+Lancer les tests unitaires :
+
+```bash
+pytest tests/ -v
+```
+
+
+
+## 👥 Auteurs
+
+- **Romain Cadot** - Développement initial
+
+## 🙏 Remerciements
+
+- [ALBERT](https://albert.etalab.gouv.fr/) - API d'IA générative pour l'administration publique
+- [LangChain](https://www.langchain.com/) - Framework pour applications LLM
+- [Streamlit](https://streamlit.io/) - Framework d'applications web Python
+
+## 📞 Support
+
+Pour toute question ou problème :
+
+- 🐛 **Issues** : [GitLab Issues](https://gitlab.cerema.fr/romain.cadot/chat-de-calais/-/issues)
+- 📧 **Email** : romain.cadot@cerema.fr
+- 📚 **Documentation** : Voir `docs.qmd` et `exemple_pipeline.ipynb`
+
+---

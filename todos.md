@@ -1,2 +1,0 @@
-- pb de lancement de la version locale quelques fois
-- fouller streamlit-extras
