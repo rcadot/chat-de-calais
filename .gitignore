@@ -32,4 +32,5 @@ tests/__pycache__/test_prompts.cpython-313-pytest-9.0.1.pyc
 tests/__pycache__/test_rag_pipeline.cpython-313-pytest-9.0.1.pyc
 .env
 coverage.xml
-coverage.xml
+rag_logs.db
+.coverage

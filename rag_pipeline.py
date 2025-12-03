@@ -1,4 +1,4 @@
-# rag_pipeline.py (VERSION COMPLÈTE)
+# rag_pipeline.py (VERSION CORRIGÉE)
 """Pipeline RAG avec HyDE et Reranking."""
 
 import time
@@ -7,14 +7,8 @@ from typing import List
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import config
-
 import sys
 import io
-
-# Forcer l'encodage UTF-8 pour éviter les erreurs charmap sous Windows
-# if sys.platform == "win32":
-#     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-#     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
 
 def generate_hyde(query: str, llm) -> str:
@@ -35,7 +29,6 @@ def generate_hyde(query: str, llm) -> str:
         # Utiliser le template HyDE du mode configuré
         hyde_template = config.get_prompt_template("hyde")
         hyde_prompt = PromptTemplate.from_template(hyde_template)
-
         chain = hyde_prompt | llm | StrOutputParser()
         hyde_doc = chain.invoke({"query": query})
 
@@ -43,7 +36,7 @@ def generate_hyde(query: str, llm) -> str:
         enhanced_query = f"{query}\n\n{hyde_doc}"
 
         if config.VERBOSE:
-            print(f"🧠 HyDE (mode: {config.PROMPT_MODE}):")
+            print(f"   HyDE (mode: {config.PROMPT_MODE}):")
             print(f"   Original: {query[:100]}...")
             print(f"   Enrichi: {hyde_doc[:200]}...")
 
@@ -51,7 +44,7 @@ def generate_hyde(query: str, llm) -> str:
 
     except Exception as e:
         if config.VERBOSE:
-            print(f"⚠️ Erreur HyDE: {e}")
+            print(f"  Erreur HyDE: {e}")
         return query
 
 
@@ -78,7 +71,7 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
 
         payload = {
             "model": config.RERANK_MODEL,
-            "prompt": query,  # ✅ Format Albert API
+            "prompt": query,
             "input": doc_texts,
         }
 
@@ -88,7 +81,7 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
         }
 
         if config.VERBOSE:
-            print(f"🔄 Rerank: {len(doc_texts)} docs...")
+            print(f" Rerank: {len(doc_texts)} docs...")
 
         response = requests.post(
             f"{config.ALBERT_BASE_URL}/rerank",
@@ -101,7 +94,7 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
             results = response.json()
 
             if config.VERBOSE:
-                print(f"✅ Rerank OK")
+                print(f" Rerank OK")
 
             # Parser et stocker les scores
             reranked_docs = []
@@ -113,13 +106,11 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
                     :top_k
                 ]:
                     doc = docs[r["index"]]
-                    # Ajouter le score dans les métadonnées
                     doc.metadata["rerank_score"] = r.get("score", 0.0)
                     reranked_docs.append(doc)
 
             elif isinstance(results, dict):
                 result_list = results.get("results", results.get("data", []))
-
                 for r in result_list[:top_k]:
                     idx = r.get("index")
                     score = r.get(
@@ -128,7 +119,6 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
 
                     if idx is not None and idx < len(docs):
                         doc = docs[idx]
-                        # Ajouter le score dans les métadonnées
                         doc.metadata["rerank_score"] = float(score)
                         reranked_docs.append(doc)
 
@@ -136,17 +126,16 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
                 return reranked_docs
             else:
                 if config.VERBOSE:
-                    print(f"⚠️ Format rerank inconnu: {results}")
+                    print(f"  Format rerank inconnu: {results}")
                 return docs[:top_k]
-
         else:
             if config.VERBOSE:
-                print(f"⚠️ Rerank error {response.status_code}")
+                print(f"  Rerank error {response.status_code}")
             return docs[:top_k]
 
     except Exception as e:
         if config.VERBOSE:
-            print(f"⚠️ Rerank failed: {e}")
+            print(f"  Rerank failed: {e}")
         return docs[:top_k]
 
 
@@ -173,37 +162,42 @@ def rag_query(
     # Déterminer le mode à utiliser
     prompt_mode = mode or config.PROMPT_MODE
 
+    # ✅ Initialiser les variables au début pour éviter UnboundLocalError
+    hyde_query = query
+    docs_initial = []
+    docs_final = []
+
     try:
         if config.VERBOSE:
             print(f"\n{'=' * 60}")
-            print(f"🔍 Nouvelle requête (mode: {prompt_mode})")
+            print(f"Nouvelle requête (mode: {prompt_mode})")
             print(f"{'=' * 60}")
-            print(f"❓ Question: {query}\n")
+            print(f"Question: {query}\n")
 
         # 1. HyDE
         if config.VERBOSE:
-            print("⏳ 1/4: Génération HyDE...")
+            print("1/4: Génération HyDE...")
         hyde_query = generate_hyde(query, llm)
 
         # 2. Retrieval
         if config.VERBOSE:
-            print(f"⏳ 2/4: Retrieval (top {config.RAG_TOP_N_RETRIEVAL})...")
+            print(f"2/4: Retrieval (top {config.RAG_TOP_N_RETRIEVAL})...")
         docs_initial = retriever.invoke(hyde_query)
 
         if config.VERBOSE:
-            print(f"   ✓ {len(docs_initial)} documents récupérés")
+            print(f"{len(docs_initial)} documents récupérés")
 
         # 3. Rerank
         if config.VERBOSE:
-            print(f"⏳ 3/4: Rerank (top {top_k})...")
+            print(f"3/4: Rerank (top {top_k})...")
         docs_final = rerank_documents(query, docs_initial, top_k)
 
         if config.VERBOSE:
-            print(f"   ✓ {len(docs_final)} documents après rerank")
+            print(f"{len(docs_final)} documents après rerank")
 
         # 4. Génération de la réponse avec le prompt du mode
         if config.VERBOSE:
-            print(f"⏳ 4/4: Génération de la réponse (mode: {prompt_mode})...\n")
+            print(f"4/4: Génération de la réponse (mode: {prompt_mode})...\n")
 
         context = "\n\n".join([d.page_content for d in docs_final])
 
@@ -249,14 +243,15 @@ def rag_query(
         error_msg = str(e)
 
         if config.VERBOSE:
-            print(f"❌ Erreur: {error_msg}")
+            print(f"Erreur: {error_msg}")
 
+        # ✅ Maintenant ces variables sont toujours définies
         return {
             "answer": None,
             "sources": [],
             "rerank_scores": [],
-            "n_docs_retrieved": 0,
-            "n_docs_final": 0,
+            "n_docs_retrieved": len(docs_initial),
+            "n_docs_final": len(docs_final),
             "execution_time": execution_time,
             "prompt_mode": prompt_mode,
             "error": error_msg,
@@ -270,13 +265,14 @@ def rag_query_stream(
     query: str, retriever, llm, logger=None, topk: int = None, mode: str = None
 ):
     """
-    Excute une requte RAG avec streaming de la rponse.
-    Yields: tuple (chunk, metadata) où metadata contient les infos à la fin
+    Exécute une requête RAG avec streaming de la réponse.
+    Yields: dict avec 'type' et contenu
     """
     start_time = time.time()
     topk = topk or config.RAG_TOP_K_DOCS
     prompt_mode = mode or config.PROMPT_MODE
 
+    # ✅ Initialiser les variables au début
     full_answer = ""
     docs_initial = []
     docs_final = []
@@ -319,8 +315,8 @@ def rag_query_stream(
             "rerank_scores": rerank_scores,
             "ndocs_retrieved": len(docs_initial),
             "ndocs_final": len(docs_final),
-            "execution_time": execution_time,
-            "prompt_mode": prompt_mode,
+            "executiontime": execution_time,
+            "promptmode": prompt_mode,
             "error": None,
             "hyde_query": hyde_query,
             "retrieved_docs": docs_initial,
@@ -330,3 +326,18 @@ def rag_query_stream(
     except Exception as e:
         error_msg = f"Erreur: {e}"
         yield {"type": "error", "content": error_msg}
+
+        # ✅ En cas d'erreur, retourner quand même les métadonnées
+        yield {
+            "type": "metadata",
+            "sources": [],
+            "rerank_scores": [],
+            "ndocs_retrieved": len(docs_initial),
+            "ndocs_final": len(docs_final),
+            "executiontime": time.time() - start_time,
+            "promptmode": prompt_mode,
+            "error": str(e),
+            "hyde_query": hyde_query,
+            "retrieved_docs": docs_initial,
+            "reranked_docs": docs_final,
+        }

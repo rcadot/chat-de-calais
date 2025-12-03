@@ -15,7 +15,7 @@ from st_copy import copy_button
 from utils_app import format_sources
 
 # ✅ MODE DEV : Changer à False pour utiliser l'IA réelle
-DEV_MODE = True
+DEV_MODE = False
 
 # Configuration de la page
 st.set_page_config(
