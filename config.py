@@ -15,9 +15,9 @@ ALBERT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
 # ============================================================================
 # MODÈLES
 # ============================================================================
-EMBEDDINGS_MODEL = "embeddings-small"
-LLM_MODEL = "albert-large"
-RERANK_MODEL = "rerank-small"
+EMBEDDINGS_MODEL = "openweight-embeddings"
+LLM_MODEL = "openweight-medium"
+RERANK_MODEL = "openweight-rerank"
 
 # ============================================================================
 # EMBEDDINGS
