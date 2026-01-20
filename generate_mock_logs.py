@@ -6,9 +6,11 @@ import random
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+from logger import RAGLogger
 
 # Configuration
-DB_PATH = "rag_logs.db"
+logger = RAGLogger()
+DB_PATH = logger.db_path
 NUM_QUERIES = 100  # Nombre de requêtes à générer
 
 # Données mock

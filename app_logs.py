@@ -68,7 +68,7 @@ def load_data():
             id, timestamp, user_query, retrieved_docs_count, 
             reranked_docs_count, execution_time_seconds, error, 
             sources, rerank_scores, prompt_mode, 
-            user_feedback, feedback_timestamp
+            user_feedback, feedback_timestamp, final_answer  
         FROM rag_queries 
         ORDER BY timestamp DESC
         """,
