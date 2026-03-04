@@ -78,6 +78,9 @@ Un système RAG intelligent permettant d'interroger une base documentaire à l'a
 ```bash
 # Cloner le repository
 git clone https://gitlab.cerema.fr/romain.cadot/chat-de-calais.git
+# ou 
+git clone https://github.com/rcadot/chat-de-calais.git
+
 cd chat-de-calais
 
 # Créer un environnement virtuel
@@ -217,9 +220,10 @@ chat-de-calais/
 │   ├── view_logs.py              # CLI de consultation logs
 │   └── generate_mock_logs.py     # Génération de logs de test
 │
-├── 📖 Documentation
+├── 📖 Documentation (dans ./docs/)
 │   ├── README.md                 # Ce fichier
 │   ├── docs.qmd                  # Documentation technique Quarto
+│   └── presentation.qmd          # Présentation technique Quarto
 │   ├── exemple_pipeline.ipynb    # Notebook de démonstration
 │   └── requirements.txt          # Dépendances Python
 │
