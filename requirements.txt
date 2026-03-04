@@ -24,3 +24,4 @@ pyyaml>=6.0.1  # Optionnel si vous gardez YAML
 streamlit
 openai
 streamlit-extras
+st_copy
