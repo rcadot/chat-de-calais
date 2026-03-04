@@ -1,0 +1,73 @@
+/*-- scss:defaults --*/
+
+// Couleurs Cerema
+$cerema-orange: #e95e28;
+$cerema-bleu-fonce: #003d7a;
+$cerema-violet: #582b51ff;
+$cerema-vert: #6cb33f;
+$cerema-gris-fonce: #58595b;
+$cerema-gris-moyen: #808184;
+$cerema-gris-clair: #d1d3d4;
+
+// Configuration du thème
+$body-bg: #ffffff;
+$body-color: $cerema-gris-fonce;
+$link-color: $cerema-bleu-fonce;
+$link-color-hover: $cerema-orange;
+$presentation-heading-color: $cerema-orange;
+$presentation-h2-color: $cerema-bleu-fonce;  // <-- Ajoute ceci
+$presentation-font-size-root: 32px;
+$presentation-heading-font: "Marianne", Arial, sans-serif;
+$font-family-sans-serif: "Marianne", Arial, sans-serif;
+
+/*-- scss:rules --*/
+
+// Style pour H3
+.reveal h3 {
+  color: $cerema-bleu-fonce;
+  font-weight: 600;
+  font-size: 1.1em !important;
+  text-transform: none;
+  margin-left: 0px;
+}
+
+// Forcer le H2 de la title slide en bleu foncé
+.reveal .title-slide h1.title ~ p.subtitle,
+.reveal section.title-slide p.subtitle,
+.reveal .slides section:first-child p.subtitle {
+  color: $cerema-bleu-fonce !important;
+  font-weight: 600 !important;
+}
+
+// Barre orange à gauche pour toutes les slides
+// .reveal .slide-background::before {
+//   content: "";
+//   position: absolute;
+//   left: 0;
+//   top: 50px;
+//   width: 50px;
+//   height: 120px;
+//   background-color: $cerema-orange;
+//   z-index: 1;
+// }
+
+// // Masquer la barre orange UNIQUEMENT sur la première slide
+// .reveal .backgrounds .slide-background:first-child::before {
+//   display: none !important;
+// }
+
+// Classe pour garder le titre en haut et centrer le contenu verticalement
+.vcenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
+.center-xy {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  text-align: center;
+}

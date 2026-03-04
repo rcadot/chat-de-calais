@@ -1,0 +1,440 @@
+---
+title: "Documentation du ChatBot de la DDTM 62"
+author: "Romain Cadot"
+date: 09-29-2025
+lang: fr
+execute:
+  warning: false
+  cache: true
+  echo: false
+  error: true
+callout-appearance: simple
+editor: source
+format: 
+  html:
+    code-overflow: scroll
+    code-fold: false
+    code-link: false
+    toc: true
+    toc-location: right
+    toc-title: Sommaire
+    embed-resources: true
+    anchor-sections: true
+    smooth-scroll: true
+    theme: flatly
+abstract: |
+    Ce code implémente un système de chatbot intelligent avec recherche augmentée (RAG) optimisé pour une application de la DDTM du Pas-de-Calais. Il permet de poser des questions sur des documents et d'obtenir des réponses contextualisées grâce à l'IA.db_init.py
+---
+
+## Précautions
+
+::: callout-caution
+## Attention
+
+Il s'agit d'une version en cours d'élaboration, des modifications dans les scripts peuvent/vont intervenir.
+Les résultats ne sont pas encore stabilisés et peuvent encore évoluer.
+:::
+
+
+
+## En quelques mots
+
+### Architecture générale
+
+Le système suit une architecture modulaire basée sur plusieurs composants interconnectés qui travaillent ensemble pour fournir des réponses intelligentes basées sur des documents.embeddings.py
+
+### Composants principaux
+
+### Configuration (config.py)
+
+Module central de configuration qui définit tous les paramètres du système, incluant les modèles d'IA, les paramètres de recherche optimisés et les timeouts pour éviter les blocages.config.py
+
+### Interface utilisateur (app.py)
+
+Application web Shiny qui présente une interface de chat avec sidebar pour la configuration, permettant de sélectionner différents fournisseurs LLM, types d'assistants et d'uploader des documents. L'interface gère les messages d'attente et affiche les documents pertinents trouvés.app.py
+
+### Base de données vectorielle (store.py)
+
+Système de stockage utilisant DuckDB avec extensions vectorielles (VSS) pour indexer et rechercher les documents. Il gère l'extraction de texte, la création d'embeddings, l'indexation HNSW pour la recherche rapide, et inclut un système de cache pour optimiser les performances.store.py
+
+### Processeur de documents (processor.py)
+
+Module responsable de l'extraction de texte depuis différents formats (PDF, DOCX, DOC, ODT, TXT, MD) avec support des barres de progression. Il utilise des techniques robustes comme l'analyse XML pour les documents Office.processor.py
+
+### Client d'embeddings (embeddings.py)
+
+Interface avec le serveur Ollama pour générer les représentations vectorielles des textes, avec support des appels synchrones et asynchrones, gestion des timeouts et des erreurs de connexion.embeddings.py
+
+### Système de reranking (reranker.py)
+
+Module optimisé pour améliorer la pertinence des résultats de recherche en utilisant un modèle spécialisé. Il inclut la parallélisation avec ThreadPoolExecutor, un système de cache intelligent et des timeouts configurables pour éviter les blocages.reranker.py
+
+### Module synthétique (synthetique.py)
+
+Implémente la technique HyDE (Hypothetical Document Embeddings) pour améliorer la recherche en générant des réponses synthétiques avant la recherche vectorielle. Il comprend un système de cache, des prompts spécialisés par domaine et une classe EnhancedRetriever pour orchestrer le processus.synthetique.py
+
+### Gestionnaire de clients (client_manager.py)
+
+Singleton gérant les instances des différents clients (embeddings, reranker, LLM) pour éviter les réinstanciations coûteuses et centraliser la gestion des connexions.client_manager.py
+
+### Utilitaires (utils.py)
+
+Fonctions helper, messages d'accueil, configuration des fournisseurs LLM disponibles et instructions pour les différents types d'assistants (technique, administratif, créatif).utils.py
+
+### Flux de traitement
+
+Le système suit un processus optimisé en plusieurs étapes pour traiter les questions des utilisateurs et fournir des réponses pertinentes basées sur les documents indexés.synthetique.py
+
+
+
+
+## Dans le détail
+
+### 1. config.py - Configuration centralisée
+
+Le fichier `config.py` implémente une classe de configuration unique utilisant le décorateur `@dataclass` pour centraliser tous les paramètres du système RAG.config.py
+
+**Classe RAGConfig:**  
+Cette dataclass stocke tous les paramètres de configuration du système sous forme d'attributs avec valeurs par défaut. Elle définit le modèle d'embedding par défaut "ryanshillington/Qwen3-Embedding-8B" qui sera utilisé pour créer les représentations vectorielles des textes. Le modèle de reranking "dengcao/Qwen3-Reranker-8B:Q4_K_M" est configuré avec quantification Q4_K_M pour optimiser la vitesse d'exécution.
+
+**Paramètres de recherche optimisés:**  
+Le `top_k_initial` est volontairement réduit à 8 (au lieu de 20) pour diminuer les temps de traitement lors de la recherche vectorielle initiale. Le `top_k_rerank` est limité à 3 documents pour accélérer l'étape de reranking. La `chunk_size` est fixée à 800 mots par chunk, un compromis entre granularité et performance pour l'indexation des documents.
+
+**Configuration serveur et timeouts:**  
+L'adresse `ollama_host` pointe vers le serveur Ollama local sur le port standard 11434. Le timeout global est réduit à 60 secondes pour éviter les blocages prolongés. Un timeout spécifique `reranker_timeout` de 15 secondes est défini pour les opérations de reranking plus rapides.
+
+**Système de cache avancé:**  
+Quatre types de cache sont activés par défaut : `enable_embedding_cache` pour mettre en cache les embeddings calculés, `enable_hyde_cache` pour les réponses synthétiques HyDE, `enable_search_cache` pour les résultats de recherche et `enable_rerank_cache` pour les scores de reranking. La taille maximale du cache est limitée à 1000 éléments pour contrôler l'usage mémoire.config.py
+
+### 2. client_manager.py - Gestionnaire de clients singleton
+
+Le fichier `client_manager.py` implémente un pattern singleton pour gérer les instances des différents clients du système.client_manager.py
+
+**Méthode **new**:**  
+Cette méthode implémente le pattern singleton en vérifiant si une instance existe déjà via `_instance`. Si c'est la première création, elle initialise l'attribut `_initialized` à False pour contrôler l'initialisation ultérieure. Toute tentative de création supplémentaire retourne la même instance existante, garantissant l'unicité globale.
+
+**Méthode **init**:**  
+L'initialisation ne s'exécute qu'une seule fois grâce au flag `_initialized`. Elle initialise les attributs clients à None : `_embedding_client` pour les embeddings, `_reranker_client` pour le reranking, et `_llm_clients` comme dictionnaire pour stocker les différents clients LLM. L'host par défaut est configuré sur le serveur Ollama local.
+
+**Méthode get_embedding_client:**  
+Cette méthode implémente un lazy loading pour le client d'embedding. Si aucun client n'existe, elle crée une nouvelle instance d'`OllamaEmbeddingClient` avec le modèle et l'host spécifiés. Elle affiche un message de création pour le debugging et retourne toujours la même instance lors des appels suivants, évitant les réinstanciations coûteuses.
+
+**Méthode get_reranker_client:**  
+Similaire au client d'embedding, cette méthode crée à la demande une instance unique d'`OllamaRerankerClient`. Le lazy loading permet d'éviter l'initialisation inutile si le reranking n'est pas utilisé. Elle stocke l'instance créée pour réutilisation lors des appels ultérieurs.
+
+**Méthode get_llm_client:**  
+Cette méthode gère plusieurs types de clients LLM en utilisant une clé composite "provider:model". Elle vérifie si un client existe déjà dans le dictionnaire `_llm_clients` avant d'en créer un nouveau. Si le fournisseur est supporté dans `LLM_PROVIDERS`, elle instancie le client approprié, sinon elle lève une `ValueError` explicite.client_manager.py
+
+### 3. embeddings.py - Client pour les embeddings
+
+Le fichier `embeddings.py` gère la communication avec le serveur Ollama pour générer les embeddings vectoriels.embeddings.py
+
+**Méthode **init**: 
+Le constructeur initialise le client avec le modèle d'embedding spécifié et l'adresse du serveur Ollama. Il nettoie l'URL en supprimant les slashes de fin via `rstrip("/")` pour éviter les URLs malformées. L'attribut `_dim` est initialisé à None et sera déterminé automatiquement lors du premier appel d'embedding.
+
+**Méthode _post:** 
+
+Cette méthode privée gère les requêtes HTTP POST synchrones vers le serveur Ollama. Elle construit l'URL complète en combinant l'host et le path fourni. Le timeout est fixé à 120 secondes pour les opérations d'embedding qui peuvent être longues. Elle gère spécifiquement trois types d'erreurs : `Timeout` avec message explicite, `ConnectionError` pour les problèmes de réseau, et une gestion générale des autres exceptions avec logging.
+
+**Méthode _post_async:**  
+
+Version asynchrone de `_post` utilisant `aiohttp` pour les requêtes non-bloquantes. Elle crée une session HTTP avec timeout global de 120 secondes et gère les contextes de façon propre avec `async with`. Les erreurs spécifiques `asyncio.TimeoutError` et `aiohttp.ClientError` sont capturées et transformées en exceptions métier compréhensibles.
+
+**Méthode encode:**  
+Cette méthode est le point d'entrée principal pour créer un embedding d'un texte donné. Elle affiche les premiers 50 caractères du texte pour le debugging et appelle l'API Ollama avec le endpoint "/api/embeddings". Elle convertit la réponse JSON en array numpy avec dtype float32 pour l'efficacité mémoire. Si c'est le premier appel, elle détermine et stocke la dimension de l'embedding pour référence future.
+
+**Méthode encode_async:**  
+Version asynchrone d'`encode` qui permet le traitement concurrent de plusieurs textes. Elle suit la même logique que la version synchrone mais utilise `await` pour les appels réseau non-bloquants. Elle affiche également des informations de debugging pour tracer les opérations asynchrones.
+
+**Méthode encode_batch:**  
+Cette méthode traite une liste de textes de façon séquentielle en appelant `encode` pour chaque élément. Elle affiche la progression via des messages numérotés (i+1/total) pour le monitoring. Elle accumule les résultats dans une liste et retourne l'ensemble des embeddings générés.
+
+**Méthode encode_batch_async:**  
+Version optimisée pour le traitement concurrent d'un batch de textes. Elle crée des tâches asynchrones pour chaque texte via `encode_async` et utilise `asyncio.gather(*tasks)` pour les exécuter en parallèle. Cette approche permet un gain de performance significatif pour les gros volumes de données.
+
+**Propriété dim:**  
+Cette propriété calculée retourne la dimension des embeddings. Si la dimension n'a jamais été déterminée (`_dim is None`), elle effectue un appel test avec le texte "test" pour découvrir automatiquement la dimensionnalité du modèle. Ceci évite de hardcoder la dimension et permet l'adaptabilité à différents modèles.embeddings.py
+
+### 4. reranker.py - Système de reranking optimisé
+
+Le fichier `reranker.py` implémente un système de reranking avancé pour améliorer la pertinence des résultats de recherche vectorielle.reranker.py
+
+**Méthode **init**:
+Le constructeur initialise le client avec le modèle quantifié "dengcao/Qwen3-Reranker-8B:Q4_K_M" pour des performances optimales. Il nettoie l'URL du serveur Ollama en supprimant les slashes de fin. Un cache de reranking `_rerank_cache` est créé pour éviter les recalculs redondants. Un pool de threads avec maximum 3 workers simultanés est instancié via `ThreadPoolExecutor` pour paralléliser les opérations de reranking.
+
+**Méthode _get_cache_key:**  
+
+Cette méthode génère une clé unique pour le cache en combinant la query, les 100 premiers caractères du document et l'instruction optionnelle. Elle utilise un hash MD5 de cette concaténation pour créer une clé compacte et déterministe. Cette approche permet d'éviter les rerankings identiques et améliore significativement les performances sur les requêtes répétées.
+
+**Méthode _post:**  
+
+Version optimisée de la requête HTTP POST avec timeout réduit à 15 secondes spécifiquement pour le reranking. Elle construit l'URL complète et envoie la requête JSON au serveur Ollama. En cas de timeout, elle affiche les 50 premiers caractères du prompt pour debugging et lève une exception spécifique. Cette méthode gère aussi les erreurs générales avec logging approprié.
+
+**Méthode _create_rerank_prompt:**  
+
+Cette méthode construit un prompt optimisé pour le reranking en utilisant le format de conversation du modèle. Elle définit une instruction par défaut pour juger la pertinence du document par rapport à la query. Le prompt est volontairement court et direct, demandant uniquement une réponse "yes" ou "no". Le document est tronqué à 500 caractères pour accélérer le traitement tout en conservant l'information essentielle.
+
+**Méthode _rerank_single_document:**  
+
+Cette méthode centrale gère le reranking d'un document unique avec mise en cache automatique. Elle vérifie d'abord si le résultat existe dans le cache via la clé générée. Si c'est un cache hit, elle retourne immédiatement le score stocké. Sinon, elle crée le prompt, mesure le temps d'exécution, et appelle l'API avec des paramètres optimisés (température 0.0 pour le déterminisme, top_p 0.1 pour réduire la diversité, num_predict 5 pour limiter la génération). Elle normalise la réponse en score 1.0 pour "yes", 0.0 pour "no", et 0.5 pour les réponses ambiguës. Le résultat est mis en cache si la taille reste sous 500 éléments.
+
+**Méthode rerank:**  
+Cette méthode principale orchestre le reranking de plusieurs documents avec optimisations avancées. Elle limite d'abord le nombre de documents à 5 maximum pour éviter les timeouts. Elle traite les documents par batches de 3 pour équilibrer parallélisme et consommation de ressources. Pour chaque batch, elle soumet les tâches au ThreadPoolExecutor et collecte les résultats avec un timeout de 20 secondes par document. Un mécanisme de sécurité arrête le processus après 40 secondes totales pour éviter les blocages. Les documents sont ensuite triés par score décroissant avec un critère secondaire de longueur pour favoriser les réponses concises. La méthode affiche des statistiques détaillées de performance et retourne les top_k résultats si spécifié.
+
+**Méthode clear_cache:**  
+Méthode utilitaire qui vide complètement le cache de reranking et affiche une confirmation. Elle permet de libérer la mémoire et de forcer le recalcul des scores si nécessaire. Cette fonctionnalité est particulièrement utile lors de changements de configuration ou de debugging.
+
+**Méthode **del**:**  
+Le destructeur ferme proprement le pool de threads pour éviter les fuites de ressources. Il utilise `shutdown(wait=False)` pour une fermeture immédiate et gère les exceptions potentielles avec un bloc try-except. Cette méthode garantit un nettoyage approprié même en cas d'arrêt inattendu du programme.reranker.py
+
+### 5. processor.py - Extracteur de documents multi-format
+
+Le fichier `processor.py` gère l'extraction de texte depuis différents formats de documents avec fallbacks robustes.processor.py
+
+**Gestion de tqdm:**  
+Le module tente d'importer tqdm pour afficher des barres de progression lors de l'extraction de longs documents. Si tqdm n'est pas disponible, il crée une classe mock avec la même interface qui ne fait rien. Cette approche permet de maintenir la compatibilité du code sans dépendance obligatoire. La variable `TQDM_AVAILABLE` contrôle l'usage réel des barres de progression.
+
+**Méthode **init**:
+Constructeur simple qui ne fait qu'initialiser la classe. Cette simplicité permet une instanciation rapide et une utilisation immédiate des méthodes d'extraction. Aucune configuration n'est nécessaire car chaque méthode gère ses propres dépendances.
+
+**Méthode extract_text_from_pdf:**  
+Cette méthode implémente une extraction PDF avec double fallback pour maximiser la compatibilité. Elle tente d'abord d'utiliser PyPDF2 en mode binaire, avec barre de progression pour les PDFs de plus de 5 pages. Si PyPDF2 n'est pas disponible, elle bascule automatiquement vers pymupdf (fitz) avec la même logique de progression. Elle accumule le texte page par page et ferme proprement les ressources. En cas d'échec des deux bibliothèques, elle retourne une chaîne vide avec message d'erreur approprié.
+
+**Méthode extract_text_from_docx:**  
+Cette méthode extrait le texte des fichiers DOCX sans dépendance externe via une approche XML native. Elle traite le fichier DOCX comme un archive ZIP et extrait directement le fichier `word/document.xml`. Elle utilise ElementTree pour parser l'XML avec le namespace Word approprié et recherche tous les éléments de texte via XPath. Les textes sont joints avec des espaces pour maintenir la lisibilité. Cette approche est plus robuste que les bibliothèques tiers et évite les problèmes de compatibilité.
+
+**Méthode extract_text_from_doc:**  
+Cette méthode gère les anciens fichiers DOC en utilisant la bibliothèque python-docx. Elle parcourt tous les paragraphes du document et accumule le texte avec des retours à la ligne. En cas d'absence de python-docx, elle affiche un message explicatif et retourne une chaîne vide. Cette méthode est moins critique car le format DOC est largement remplacé par DOCX.
+
+**Méthode extract_text_from_odt:**  
+Cette méthode traite les fichiers OpenDocument Text en utilisant une approche similaire à DOCX. Elle extrait le fichier `content.xml` de l'archive ZIP et utilise ElementTree avec le namespace OpenDocument approprié. Elle recherche tous les paragraphes via XPath et les joint avec des retours à la ligne pour préserver la structure. Cette méthode assure la compatibilité avec les suites bureautiques libres.
+
+**Méthode extract_text (non visible dans l'extrait):**  
+Cette méthode dispatcher détermine automatiquement le type de fichier via l'extension et appelle la méthode d'extraction appropriée. Elle gère aussi les formats simples comme TXT et MD par lecture directe. Cette centralisation simplifie l'usage et garantit l'extensibilité pour de nouveaux formats.processor.py
+
+### 6. utils.py - Utilitaires et constantes du système
+
+Le fichier `utils.py` centralise les constantes, messages et fonctions utilitaires du système.utils.py
+
+**WELCOME_MESSAGE:**  
+Cette constante stocke le message d'accueil formaté en Markdown qui s'affiche au lancement de l'application. Il présente le système comme un chatbot spécialisé pour la DDTM du Pas-de-Calais et propose trois exemples concrets de questions : informations sur Pas-de-Calais Habitat, note sur les ZFE (Zones à Faibles Émissions), et points clés sur les ZAER. Ces exemples guident l'utilisateur vers des usages appropriés.
+
+**LLM_PROVIDERS:**  
+Ce dictionnaire mappe les noms de fournisseurs vers leurs classes d'implémentation respectives. Actuellement, seul "Ollama" est configuré avec la classe `ChatOllama` importée du module chatlas. Cette structure permet d'ajouter facilement d'autres fournisseurs comme OpenAI, Anthropic ou Google sans modification du code principal.
+
+**MODELS_BY_PROVIDER:**  
+Dictionnaire imbriqué qui associe chaque fournisseur à la liste de ses modèles disponibles. Pour Ollama, deux modèles sont configurés : "gemma3" et "qwen3". Cette configuration centralisée facilite la maintenance et permet d'adapter rapidement les modèles disponibles selon les besoins ou les capacités du serveur.
+
+**GENERAL_INSTRUCTIONS:**  
+Chaîne de caractères contenant les instructions de base pour l'assistant IA. Elle définit le comportement attendu : utiliser le contexte fourni, répondre de manière précise et concise, toujours répondre en français, et indiquer clairement les limitations. Ces instructions générales sont complétées par les instructions spécifiques selon le type d'assistant choisi.
+
+**ASSISTANT_TYPE_INSTRUCTIONS:**  
+Dictionnaire qui définit trois profils d'assistant avec des instructions spécialisées. L'assistant "technique" privilégie la précision et l'explication des concepts. L'assistant "créatif" adopte une approche plus libre et innovante. L'assistant "administratif" maintient un ton formel et structuré adapté aux contextes institutionnels. Cette différenciation permet d'adapter le style de réponse selon l'usage.
+
+**Fonction get_score_color:**  
+Cette fonction utilitaire convertit un score numérique en code couleur hexadécimal pour l'affichage visuel des résultats de recherche. Les scores élevés (≥ 0.8) reçoivent un fond vert clair (#d4edda), les scores moyens (≥ 0.5) un fond jaune clair (#fff3cd), et les scores faibles un fond rouge clair (#f8d7da). Cette codification visuelle permet à l'utilisateur d'évaluer rapidement la pertinence des résultats retournés.utils.py
+
+### 7. synthetique.py - Système HyDE pour améliorer la recherche
+
+Le fichier `synthetique.py` implémente la technique HyDE (Hypothetical Document Embeddings) pour améliorer la qualité de la recherche vectorielle.synthetique.py
+
+**Classe SyntheseGenerator:**
+
+**Méthode **init**:
+
+Cette méthode initialise le générateur avec un client de chat (Ollama, OpenAI, etc.) et un domaine d'expertise. Elle stocke le domaine ("technique" ou "general") qui détermine le style des prompts utilisés. Un cache de réponses `_response_cache` est créé pour éviter les régénérations identiques et améliorer les performances sur les requêtes répétées.
+
+**Méthode _get_domain_prompts:**  
+
+Cette méthode définit des templates de prompts spécialisés par domaine d'expertise. Le prompt "technique" demande des réponses avec vocabulaire technique, mentionnant méthodes d'analyse, outils pertinents, concepts clés et bonnes pratiques. Le prompt "general" adopte une approche plus large, demandant des réponses informatives et structurées. Ces prompts incluent un placeholder `{query}` qui sera remplacé par la question utilisateur.
+
+**Méthode generate_synthetic_response_pure_sync:**  
+Cette méthode centrale génère une réponse synthétique basée sur la question de l'utilisateur. Elle vérifie d'abord le cache avec une clé composite incluant domaine, query et type de prompt. En cas de cache hit, elle affiche un message de debug et retourne immédiatement la réponse cachée. Elle sélectionne le template de prompt approprié selon le domaine, formate le prompt avec la query utilisateur, et affiche des informations de debug détaillées. Elle appelle l'API du chat client de façon synchrone avec mesure du temps d'exécution. La réponse est extraite selon différents formats possibles (content, text, ou string). Elle met en cache le résultat si différent de la query originale et gère les erreurs en retournant la query originale.
+
+**Classe EnhancedRetriever:**
+
+**Méthode **init**:
+Le constructeur lie le retriever au vector store et au générateur de synthèse optionnel. Il initialise un cache de recherche `_search_cache` pour éviter les recherches vectorielles redondantes, particulièrement utile lors de tests ou de requêtes similaires répétées.
+
+**Méthode search_with_synthetic_pure_sync:**  
+Cette méthode orchestrale implémente la logique complète de recherche HyDE avec optimisations. Elle vérifie d'abord le cache de recherche avec une clé composite incluant tous les paramètres. Elle initialise la liste des requêtes avec la query originale. Si la synthèse est activée, elle génère une réponse synthétique via le générateur et l'ajoute à la liste si différente de l'originale. Elle optimise le top_k par requête en le divisant par le nombre de requêtes pour équilibrer performance et exhaustivité.
+
+Pour chaque requête, elle effectue une recherche vectorielle avec reranking désactivé à cette étape. Elle mesure et affiche les temps d'exécution pour chaque recherche. Elle accumule tous les candidats et gère les erreurs individuelles sans arrêter le processus. Elle applique une déduplication robuste basée sur un hash du contenu (200 premiers caractères) pour éliminer les doublons tout en préservant la diversité.
+
+Si le reranking final est configuré, elle limite les documents à 10 maximum pour éviter les timeouts. Elle utilise la query originale pour le reranking (pas la synthétique) et reconstitue le format final avec scores de reranking. En cas d'erreur de reranking, elle utilise un fallback basé sur les scores de similarité. Elle met en cache le résultat final et affiche des statistiques complètes de performance.
+
+**Méthode _generate_variants_pure_sync:**  
+
+Cette méthode génère des variantes de la query originale pour diversifier la recherche. Elle limite le nombre de variantes à 1 maximum pour éviter les timeouts. Elle utilise des templates de prompts spécialisés pour créer des reformulations techniques. Elle gère les erreurs individuelles et continue le processus même en cas d'échec partiel.synthetique.py
+
+### 8. store.py - Base de données vectorielle DuckDB
+
+Le fichier `store.py` implémente le système de stockage vectoriel central utilisant DuckDB avec optimisations avancées.store.py
+
+**Méthode **init**:
+Le constructeur initialise le vector store avec la configuration RAG fournie. Il crée une instance de DocumentProcessor intégrée pour l'extraction de texte. Il récupère les clients embedding et reranker via le gestionnaire de clients avec les modèles configurés. Il établit une connexion DuckDB persistante et tente d'installer l'extension VSS pour les opérations vectorielles optimisées. Il découvre automatiquement la dimension des embeddings et initialise un cache d'embeddings. Il crée la structure de tables avec tous les index nécessaires.
+
+**Méthode _discover_embedding_dimension:**  
+
+Cette méthode détermine automatiquement la dimension des vecteurs d'embedding. Elle vérifie d'abord si l'embedder expose un attribut `dim` directement. Sinon, elle génère un embedding test avec le texte "test" et mesure sa longueur. En cas d'erreur, elle utilise 4096 comme dimension par défaut (compatible avec la plupart des modèles modernes). Cette approche garantit la compatibilité avec différents modèles d'embedding sans configuration manuelle.
+
+**Méthode _create_tables:**  
+
+Cette méthode gère la création et migration des tables de façon robuste. Elle interroge d'abord le schéma existant pour identifier les colonnes présentes. Si aucune table n'existe, elle crée la structure complète avec tous les champs modernes : id, filepath, filename, filetype, content, metadata, chunk_index, file_hash, contenthash, embedding, createdat, et lastmodif. Si la table existe mais manque de colonnes, elle les ajoute dynamiquement via ALTER TABLE. Elle appelle ensuite la création des index et des fonctions UDF.
+
+**Méthode _ensure_indexes:**  
+
+Cette méthode crée les index nécessaires pour optimiser les performances de recherche. Elle crée des index B-tree standards sur file_hash, contenthash et filepath pour les recherches exactes rapides. Elle tente de créer un index HNSW sur la colonne embedding pour la recherche vectorielle optimisée, avec métrique cosine. Si l'extension VSS n'est pas disponible, elle crée un index classique sur le contenu textuel comme fallback. Elle gère silencieusement les erreurs pour maintenir la compatibilité avec différentes versions de DuckDB.
+
+**Méthode get_file_hash:**  
+Cette méthode calcule le hash MD5 d'un fichier avec optimisations pour les gros fichiers. Elle détermine d'abord la taille du fichier pour décider d'utiliser une barre de progression. Pour les fichiers supérieurs à 10MB, elle affiche une barre de progression via tqdm avec unités lisibles (B, KB, MB). Elle lit le fichier par chunks de 4096 octets pour contrôler l'usage mémoire. Le hash résultant sert à détecter les modifications de fichiers et éviter le retraitement inutile.
+
+**Méthode split_text_into_chunks:**  
+Cette méthode découpe intelligemment le texte en segments de taille configurable. Elle utilise la taille de chunk configurée dans RAGConfig ou accepte une taille spécifique. Elle divise le texte par mots (pas par caractères) pour préserver l'intégrité sémantique. Elle crée des chunks en joignant les mots avec des espaces, assurant une segmentation naturelle. Si le texte est vide ou très court, elle retourne au moins un chunk contenant le texte complet.
+
+**Méthode process_uploaded_files:**  
+Cette méthode traite spécifiquement les fichiers uploadés via l'interface web sans affecter les documents existants. Elle scanne uniquement le dossier temporaire fourni et identifie les formats supportés. Pour chaque fichier, elle calcule le hash et vérifie s'il existe déjà dans la base (évite les doublons). Elle extrait le texte, crée les chunks, génère les embeddings et insère en base avec un ID unique incluant timestamp. Elle gère les erreurs individuelles et retourne le nombre de chunks traités.
+
+**Méthode scan_and_process_documents:**  
+Cette méthode complète orchestre l'indexation d'un dossier complet avec barres de progression détaillées. Elle scanne récursivement le dossier pour identifier tous les fichiers supportés. Elle synchronise la base avec le système de fichiers en supprimant les entrées de fichiers supprimés. Elle traite chaque fichier avec barre de progression principale montrant le fichier en cours. Pour chaque fichier, elle affiche le hash, l'extraction, et l'embedding en cours. Elle utilise des barres de progression secondaires pour les gros fichiers avec nombreux chunks. Elle gère les erreurs robustement et affiche des statistiques complètes à la fin.
+
+**Méthode search_similar_documents:**  
+Cette méthode implémente la recherche vectorielle avec fallbacks robustes. Elle détermine automatiquement le top_k initial plus élevé si le reranking est activé. Elle tente d'abord d'utiliser la fonction UDF optimisée avec recherche cosine directe en SQL. En cas d'échec, elle utilise un fallback manuel calculant les similarités avec NumPy et barre de progression pour les grandes bases. En dernier recours, elle effectue une recherche textuelle LIKE. Si le reranking est activé, elle applique le reranker sur les résultats initiaux et reconstitue le format final. Elle gère toutes les erreurs avec des fallbacks appropriés et mesure les performances.store.py
+
+
+### 9. db_init.py - Script d'initialisation de la base
+
+Le fichier `db_init.py` fournit un script standalone pour l'initialisation complète du système de vector store.db_init.py
+
+**Fonction main:**  
+Cette fonction orchestrale gère l'initialisation complète du système avec affichage détaillé du processus. Elle débute par l'affichage d'un titre formaté pour identifier clairement l'opération en cours. Elle crée une instance de `RAGConfig` avec les paramètres par défaut optimisés du système. Elle affiche tous les paramètres de configuration critique : modèle d'embedding utilisé, modèle de reranker, valeurs de top-k pour les différentes phases, taille des chunks configurée, et statut du reranking.
+
+Elle initialise ensuite le `DuckDBVectorStore` avec la configuration, ce qui déclenche automatiquement la création des tables, index et fonctions UDF nécessaires. Elle lance le processus d'indexation via `scan_and_process_documents()` qui scanne récursivement le dossier "documents" et traite tous les fichiers supportés avec barres de progression détaillées. Cette méthode retourne le nombre de fichiers distincts traités.
+
+Elle affiche les statistiques finales : nombre total de fichiers traités et nombre total de chunks indexés via `get_document_count()`. Elle récupère un résumé détaillé par type de fichier via `get_files_summary()` qui retourne une liste de tuples (type, nombre_chunks, nombre_fichiers). Pour chaque type de document, elle affiche le format, le nombre de chunks créés et le nombre de fichiers uniques correspondants.
+
+Elle ferme proprement la connexion au vector store via `close()`. Elle ouvre ensuite une nouvelle connexion DuckDB directe pour vérifier le contenu de la base de données. Elle exécute une requête de vérification récupérant les colonnes essentielles : filename, filetype, content, createdat, et lastmodif. Cette requête permet de valider que l'indexation s'est correctement déroulée et que les métadonnées sont bien stockées. Elle ferme la connexion de vérification et affiche un message de fin de traitement.
+
+**Point d'entrée principal:**  
+Le script utilise le pattern standard `if __name__ == "__main__":` pour permettre l'exécution directe tout en conservant la possibilité d'import comme module. Cette approche facilite l'intégration dans des workflows plus complexes ou l'exécution manuelle pour la maintenance de la base.db_init.py
+
+
+
+```{mermaid}
+graph TD
+    A[db_init démarrage] --> B[Création RAGConfig]
+    B --> C[Création DuckDB]
+    C --> D[Connexion DuckDB + VSS]
+    D --> E[Création tables et index]
+    E --> F[Scan dossier documents]
+    F --> G[Pour chaque fichier]
+    G --> H[Extraction texte]
+    H --> I[Découpage chunks]
+    I --> J[Génération embeddings]
+    J --> K[Insertion base]
+    K --> G
+    G --> L[Affichage statistiques]
+    L --> M[Fin]
+```
+
+
+### 10. app.py - Interface web Shiny principale
+
+Le fichier `app.py` implémente l'interface web complète du système RAG avec une architecture réactive sophistiquée.app.py
+
+::: {.column-page}
+
+```{mermaid}
+
+
+flowchart TD
+    UserInput([Utilisateur saisit message]) --> Validate{Message non vide<br/>+ Client LLM OK?}
+    Validate -->|Non| ErrorMsg[Affichage erreur]
+    Validate -->|Oui| ShowSpinner[Affichage spinner<br/>Recherche en cours...]
+    
+    ShowSpinner --> CheckRetriever{Enhanced Retriever<br/>disponible?}
+    
+    %% Branche HyDE
+    CheckRetriever -->|Oui| HydeSearch[search_with_synthetic<br/>timeout 120s]
+    HydeSearch --> GenSynthetic[Génération réponse<br/>SyntheseGenerator]
+    GenSynthetic --> SearchBoth[Recherche originale <br/>+ synthétique]
+    SearchBoth --> Dedup[Déduplication résultats]
+    Dedup --> Rerank[Reranking final<br/>OllamaRerankerClient]
+    
+    %% Branche classique
+    CheckRetriever -->|Non| ClassicSearch[search_similar_documents<br/>timeout 30s]
+    ClassicSearch --> VectorOnly[Recherche simple]
+    
+    %% Convergence
+    Rerank --> UpdateDocs[Mise à jour selected_docs]
+    VectorOnly --> UpdateDocs
+    
+    UpdateDocs --> CheckDocs{Documents trouvés?}
+    CheckDocs -->|Oui| BuildContext[Construction prompt<br/>avec contexte + instructions]
+    CheckDocs -->|Non| DirectPrompt[Prompt sans contexte<br/>réponse générale]
+    
+    BuildContext --> CallLLM[Appel LLM streaming<br/>timeout 45s]
+    DirectPrompt --> CallLLM
+    
+    CallLLM --> StreamResponse[Affichage réponse<br/>en temps réel]
+    StreamResponse --> ShowSources[Affichage sources<br/>avec scores]
+    ShowSources --> Finish([Fin traitement])
+    
+    %% Gestion erreurs
+    HydeSearch --> TimeoutHyde{Timeout?}
+    TimeoutHyde -->|Oui| FallbackClassic[Fallback recherche classique]
+    FallbackClassic --> VectorOnly
+    
+    CallLLM --> TimeoutLLM{Timeout LLM?}
+    TimeoutLLM -->|Oui| ErrorTimeout[Message erreur timeout]
+    ErrorTimeout --> Finish
+    
+    ErrorMsg --> Finish
+    
+    %% Styles
+    classDef startNode fill:#c8e6c9
+    classDef processNode fill:#bbdefb
+    classDef decisionNode fill:#fff9c4
+    classDef errorNode fill:#ffcdd2
+    classDef finishNode fill:#d1c4e9
+    
+    class UserInput,Finish startNode
+    class ShowSpinner,GenSynthetic,SearchBoth,Dedup,Rerank,VectorOnly,BuildContext,CallLLM,StreamResponse processNode
+    class Validate,CheckRetriever,CheckDocs,TimeoutHyde,TimeoutLLM decisionNode
+    class ErrorMsg,ErrorTimeout,FallbackClassic errorNode
+
+```
+
+
+:::
+
+
+**Configuration globale:**  
+Le module importe toutes les dépendances nécessaires : framework Shiny pour l'interface web, modules asyncio pour la gestion asynchrone, bibliothèques pour la manipulation de documents, et tous les modules custom du système RAG. Il initialise une configuration par défaut via `RAGConfig()` et crée le vector store global `DuckDBVectorStore(config)` qui sera partagé par tous les utilisateurs.
+
+**Interface utilisateur (app_ui):**  
+L'interface utilise `ui.page_fillable` pour occuper toute la fenêtre du navigateur avec optimisation responsive. Elle définit des styles CSS custom pour réduire la taille de police globale, créer des animations de spinner pour les états de chargement, et styliser les messages d'attente avec bordures colorées et icônes. La sidebar contient les contrôles principaux : sélecteur de fournisseur LLM avec choix dynamique, sélecteur de modèle mis à jour automatiquement, sélecteur de type d'assistant (administratif/technique/créatif), composant d'upload de fichiers multiples, et mode sombre optionnel. La sidebar est configurée fermée par défaut pour maximiser l'espace de chat.
+
+Le contenu principal utilise `ui.layout_columns` avec disposition responsive : colonne de gauche (8/12 sur grand écran) contenant l'interface de chat avec header personnalisé, zone de chat interactive, et boutons d'action (nouveau chat, téléchargement). Colonne de droite (4/12) affichant les documents sélectionnés avec header et interface de visualisation expandable. Le thème utilise une couleur primaire violette (#a855f7) cohérente avec l'identité visuelle.
+
+**Fonction serveur (server):**  
+La fonction serveur gère toute la logique réactive avec variables d'état : `selected_docs` pour les documents trouvés, `selected_format` pour le format d'export, `search_method_used` pour tracer les méthodes utilisées, et `enhanced_retriever_var` pour l'instance du retriever HyDE.
+
+**Gestion réactive des modèles:**  
+L'effet `update_llm_model` surveille les changements de fournisseur et met à jour automatiquement la liste des modèles disponibles via `MODELS_BY_PROVIDER`. L'effet `update_chat_client` surveille provider+model et crée le client LLM approprié via le gestionnaire de clients. L'effet `update_enhanced_retriever` surveille provider+model+assistant_type, mappe le type d'assistant vers un domaine HyDE (administratif→general, technique→technique, créatif→general), et crée l'enhanced retriever avec vector store, client chat et domaine appropriés.
+
+**Traitement des fichiers uploadés:**  
+L'effet `process_files` gère l'upload de façon complètement asynchrone. Il crée un dossier temporaire, copie tous les fichiers uploadés, et appelle `process_uploaded_files` dans un thread séparé via `asyncio.to_thread` pour éviter le blocage de l'interface. Il affiche des notifications de succès avec nombre de fichiers et chunks traités, ou des notifications d'erreur en cas de problème.
+
+**Gestionnaire de chat principal:**  
+La fonction `handle_user_input` orchestre tout le processus de réponse avec gestion d'erreurs robuste et messages d'attente progressifs. Elle valide d'abord la présence d'un message utilisateur et d'un client LLM configuré. Elle affiche des messages d'attente avec spinners animés pour informer l'utilisateur des étapes en cours.
+
+Pour la recherche, si un retriever HyDE est disponible, elle l'utilise avec synthèse activée et timeout de 120 secondes. Sinon, elle utilise la recherche vectorielle classique avec timeout de 30 secondes. Elle gère spécifiquement les timeouts avec messages d'erreur appropriés et continue le processus même en cas d'échec partiel.
+
+Elle met à jour les documents sélectionnés et construit le prompt contextuel : avec documents trouvés, elle inclut le contexte numéroté et les instructions spécialisées par type d'assistant. Sans documents, elle génère une réponse basée sur les connaissances générales du modèle. Elle utilise le streaming asynchrone avec timeout de 45 secondes et gère les erreurs de timeout spécifiquement.
+
+**Rendu des documents sélectionnés:**  
+La fonction `selected_documents` génère dynamiquement l'affichage des documents trouvés avec interface expandable. Elle vérifie d'abord s'il y a des documents et affiche un message centré si aucun. Elle détermine le type de score (reranking vs similarité) et applique les codes couleurs appropriés via `get_score_color`. Elle extrait les noms de fichiers proprement et tronque le contenu à 150 caractères avec option d'expansion. Elle génère du HTML custom avec boutons toggle pour les longs documents, colorisation des scores, et boutons de téléchargement individuels.
+
+**Fonctionnalités supplémentaires:**  
+Le système inclut la gestion du nouveau chat qui remet à zéro les variables réactives, le téléchargement de conversation au format Word avec formatage professionnel, et la gestion d'erreurs globale avec messages utilisateur compréhensibles. L'architecture asynchrone garantit une interface réactive même lors d'opérations longues.app.py
