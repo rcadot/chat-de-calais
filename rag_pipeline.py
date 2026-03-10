@@ -71,8 +71,8 @@ def rerank_documents(query: str, docs: List, top_k: int = None) -> List:
 
         payload = {
             "model": config.RERANK_MODEL,
-            "prompt": query,
-            "input": doc_texts,
+            "query": query,
+            "documents": doc_texts,
         }
 
         headers = {
