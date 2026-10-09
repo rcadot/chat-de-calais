@@ -8,9 +8,15 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+import config
 from logger import RAGLogger
 
-st.set_page_config(page_title="Dashboard RAG Logs", page_icon="📊", layout="wide")
+# Avatar de l'assistant (parametres.yaml : interface.avatar), emoji à défaut
+AVATAR = config.AVATAR_PATH if Path(config.AVATAR_PATH).is_file() else "📊"
+
+st.set_page_config(page_title="Dashboard RAG Logs", page_icon=AVATAR, layout="wide")
+if AVATAR != "📊":
+    st.logo(AVATAR, size="large")
 
 # Init logger
 logger = RAGLogger()
@@ -90,7 +96,7 @@ def load_data():
             scores = json.loads(scores_json)
             valid_scores = [s for s in scores if s is not None]
             return valid_scores if valid_scores else None
-        except:
+        except (ValueError, TypeError, KeyError):
             return None
 
     df["rerank_scores_parsed"] = df["rerank_scores"].apply(parse_scores)
@@ -400,7 +406,7 @@ for sources_json in df["sources"].dropna():
     try:
         sources = json.loads(sources_json)
         all_sources.extend([Path(s).name for s in sources])
-    except:
+    except (ValueError, TypeError, KeyError):
         pass
 
 if all_sources:
@@ -530,7 +536,7 @@ if st.button("Voir détail"):
                         }
                     )
                     st.dataframe(sources_df, use_container_width=True, hide_index=True)
-                except:
+                except (ValueError, TypeError, KeyError):
                     pass
 
 # Export

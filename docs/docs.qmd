@@ -1,6 +1,6 @@
 ---
 title: "Documentation Technique - Chat de Calais"
-subtitle: "Système RAG avec HyDE et Reranking ALBERT"
+subtitle: "Recherche hybride et reranking Albert"
 author: "Documentation Projet"
 date: today
 format:
@@ -18,605 +18,444 @@ format:
     number-sections: true
 ---
 
-# Vue d'ensemble du projet
+# Vue d'ensemble
 
-**Chat de Calais** est un système de Retrieval-Augmented Generation (RAG) permettant d'interroger une base documentaire à l'aide d'intelligence artificielle. Le système utilise les modèles ALBERT (API Etalab) pour les embeddings, la génération de texte et le reranking.
+**Chat de Calais** est un assistant documentaire fondé sur la génération augmentée par la recherche (RAG, *Retrieval-Augmented Generation*). Il interroge les notes de la DDTM du Pas-de-Calais au moyen de l'API Albert (Etalab) et d'une interface Streamlit. Le présent document s'adresse aux développeurs et aux référents techniques appelés à reprendre le projet : il décrit l'architecture en vigueur, les réglages disponibles et les procédures d'exploitation.
 
-## Architecture générale
+## Principe de fonctionnement
 
-Le système est composé de plusieurs modules indépendants :
+Les documents du dossier `documents/` sont lus, découpés en passages, puis stockés dans une base vectorielle Chroma. À chaque question, l'application récupère les passages les plus pertinents, les ordonne, puis demande au modèle de rédiger une réponse qui cite ses sources par numéro. Un seuil de pertinence interdit l'appel au modèle lorsque aucun passage ne répond à la question.
 
-- **Indexation** : Chargement et vectorisation incrémentale des documents
-- **Pipeline RAG** : HyDE + Retrieval + Reranking + Génération
-- **Applications** : Interface de chat Streamlit et dashboard de logs
-- **Logging** : Traçabilité complète des requêtes et feedbacks utilisateurs
-- **Gestion documentaire** : Support de documents permanents et temporaires
+Quatre modèles Albert interviennent, tous configurables dans `parametres.yaml`.
 
-## Technologies utilisées
+| Rôle | Modèle par défaut | Remarque |
+|------|-------------------|----------|
+| Réponse, reformulation, HyDE (facultatif) | `openweight-medium` | Température 0,1 |
+| Représentation vectorielle | `openweight-embeddings` | Un changement impose une réindexation |
+| Tri par pertinence | `openweight-rerank` | Appel à l'endpoint de rerank d'Albert |
+| OCR | `openweight-ocr` (alias de `lightonocr-2-1b`) | Option `mistral-ocr-2512`, accès restreint, repli automatique sur le modèle ouvert |
 
-- **LangChain** : Framework RAG et chaining de modèles
-- **ChromaDB** : Base vectorielle persistante
-- **Streamlit** : Interface web interactive
-- **SQLite** : Base de données de logs
-- **ALBERT API** : Modèles d'embeddings, LLM et reranking
-- **Plotly** : Visualisations interactives
-
----
-
-# Configuration (`config.py`)
-
-Le fichier `config.py` centralise tous les paramètres du système.
-
-## Paramètres API
-
-```python
-ALBERT_API_KEY = os.getenv("ALBERT_API_KEY", "")
-ALBERT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
-
-# Modèles utilisés
-EMBEDDINGS_MODEL = "embeddings-small"
-LLM_MODEL = "albert-large"
-RERANK_MODEL = "rerank-small"
-```
-
-## Chunking des documents
-
-```python
-CHUNK_SIZE = 2000              # Taille des chunks en caractères
-CHUNK_OVERLAP = 400            # Chevauchement entre chunks
-CHUNK_SEPARATORS = ["\n\n", "\n", ". ", "! ", "? ", " ", ""]
-```
-
-## Pipeline RAG
-
-```python
-RAG_TOP_K_DOCS = 5             # Nombre de documents finaux utilisés
-RAG_TOP_N_RETRIEVAL = 30       # Nombre de documents récupérés
-USE_HYDE = True                # Activer HyDE (Hypothetical Document Embeddings)
-USE_RERANK = True              # Activer le reranking ALBERT
-```
-
-## Modes de prompt
-
-Le système propose 3 modes de réponse configurables :
-
-| Mode | Description | Usage |
-|------|-------------|-------|
-| **Administratif** | Réponses formelles, ton réglementaire, citations précises | Administrations publiques |
-| **Technique** | Réponses détaillées avec procédures et exemples | Documentation technique |
-| **Créatif** | Réponses pédagogiques avec analogies | Vulgarisation |
-
-Chaque mode dispose de templates personnalisés pour HyDE et RAG.
-
----
-
-# Indexation des documents
-
-## Module `loaders.py`
-
-Le module `loaders.py` gère le chargement de multiples formats :
-
-```python
-SUPPORTED_EXTENSIONS = [".pdf", ".docx", ".odt", ".txt", 
-                        ".md", ".html", ".htm"]
-```
-
-### Fonction principale
-
-```python
-def load_document(file_path: str) -> List[Document]:
-    """Charge un document selon son extension"""
-    ext = Path(file_path).suffix.lower()
-
-    if ext == '.pdf':
-        return PyPDFLoader(file_path).load()
-    elif ext == '.docx':
-        return Docx2txtLoader(file_path).load()
-    elif ext in ['.txt', '.text']:
-        # Gestion multi-encodage
-        for encoding in config.TEXT_ENCODINGS:
-            try:
-                return TextLoader(file_path, encoding=encoding).load()
-            except:
-                continue
-    # ... autres formats
-```
-
-## Module `indexer.py`
-
-L'indexeur implémente une **indexation incrémentale** basée sur les hash MD5 des fichiers.
-
-### Processus d'indexation
-
-1. **Scan du dossier** `./documents`
-2. **Calcul des hash MD5** pour chaque fichier
-3. **Détection des changements** (nouveaux, modifiés, supprimés)
-4. **Mise à jour incrémentale** de ChromaDB
-5. **Sauvegarde des métadonnées** dans `index_metadata.json`
-
-### Fonction clé
-
-```python
-def index_documents(embeddings):
-    """Indexation incrémentale des documents"""
-
-    # Charger métadonnées existantes
-    old_files = load_metadata()
-
-    # Scanner documents actuels
-    current_files = scan_documents()
-
-    # Détecter changements
-    new, modified, deleted, unchanged = detect_changes(
-        old_files, current_files
-    )
-
-    # Supprimer chunks obsolètes
-    for file_path in deleted + modified:
-        collection.delete(where={"source": file_path})
-
-    # Indexer nouveaux/modifiés
-    files_to_index = new + modified
-    for file_path in files_to_index:
-        docs = load_document(file_path)
-        chunks = splitter.split_documents(docs)
-        vectorstore.add_documents(chunks)
-
-    return vectorstore, retriever
-```
-
-### Base de données ChromaDB
-
-- **Chemin** : `./chroma_db_rag`
-- **Collection** : `documents_rag`
-- **Persistence** : Disque (SQLite + parquet)
-- **Métadonnées** : source, page, timestamp
-
----
-
-# Pipeline RAG (`rag_pipeline.py`)
-
-Le pipeline RAG implémente une approche en 4 étapes.
-
-## Architecture du pipeline
+## Schéma du pipeline
 
 ```{mermaid}
-graph LR
-    A[Question] --> B[HyDE]
-    B --> C[Retrieval 30 docs]
-    C --> D[Reranking Top 5]
-    D --> E[Génération LLM]
-    E --> F[Réponse]
+flowchart TD
+    D[Documents] --> L[Chargement et OCR]
+    L --> M[Métadonnées de corpus et en-tête contextuel]
+    M --> I[Découpage et indexation]
+    I --> C[(Chroma + index BM25)]
+    Q[Question] --> R[Reformulation si question de suivi]
+    R --> S[Recherche hybride vectorielle + BM25, fusion RRF]
+    R -.-> H[HyDE, optionnel]
+    H -.-> S
+    C --> S
+    S --> G[Regroupement des quasi-doublons]
+    G --> K[Rerank Albert]
+    K --> T[Seuil de pertinence]
+    T --> P[Plafond par document, 5 passages]
+    P --> V[Élargissement aux voisins]
+    V --> A[Rédaction avec citations]
+    A --> U[Interface Streamlit]
+    A --> J[(Journal SQLite)]
 ```
 
-## Étape 1 : HyDE (Hypothetical Document Embeddings)
+## Modules
 
-HyDE génère un document hypothétique répondant à la question, ce qui améliore la qualité du retrieval.
+| Module | Rôle |
+|--------|------|
+| `config.py` | Lecture, validation et exposition des paramètres |
+| `loaders.py`, `doc_reader.py` | Lecture des formats, OCR, lecteur `.doc` en Python pur |
+| `corpus.py` | Métadonnées tirées du chemin, en-tête contextuel, regroupement des doublons, filtres |
+| `indexer.py` | Indexation incrémentale dans Chroma |
+| `retrieval.py` | Recherche hybride (vectorielle, BM25, fusion RRF), fusion du chevauchement |
+| `rag_pipeline.py` | Enchaînement des étapes d'une question |
+| `albert_client.py` | Clients Albert (embeddings, modèle de réponse) |
+| `app_chat.py`, `utils_app.py`, `temp_documents.py` | Interface de chat, utilitaires, documents temporaires |
+| `logger.py`, `app_logs.py`, `view_logs.py` | Journal SQLite, tableau de bord, consultation en ligne de commande |
+| `evaluate.py` | Évaluation de la recherche sur un jeu de questions |
 
-```python
-def generate_hyde(query: str, llm) -> str:
-    """Génère un document hypothétique avec HyDE"""
+# Paramétrage
 
-    # Utiliser le template HyDE du mode configuré
-    hyde_template = config.get_prompt_template("hyde")
-    hyde_prompt = PromptTemplate.from_template(hyde_template)
+## Le fichier `parametres.yaml`
 
-    chain = hyde_prompt | llm | StrOutputParser()
-    hyde_doc = chain.invoke({"query": query})
+Tous les réglages modifiables sans toucher au code sont rassemblés dans `parametres.yaml`, commenté à l'intention d'un lecteur non développeur. Il comporte huit sections.
 
-    # Combiner query + document hypothétique
-    enhanced_query = f"{query}\n\n{hyde_doc}"
+| Section | Contenu |
+|---------|---------|
+| `albert` | Adresse de l'API, modèles, température, tentatives et délai maximal |
+| `documents` | Dossier source, extensions lues, exclusions, mots de version validée, motif de date de dossier, encodages |
+| `base` | Dossier Chroma, nom de la collection, taille de lot, chemin du journal des requêtes |
+| `decoupage` | Taille des passages, chevauchement, séparateurs, en-tête contextuel |
+| `recherche` | Candidats, passages retenus, HyDE, mode hybride, rerank, seuils, voisins, historique, dédoublonnage, plafond |
+| `ocr` | Activation, moteur, résolution, garde-fous, seuils de détection des pages et images |
+| `interface` | Titre, avatar, modes de réponse, message d'accueil, textes des étapes, seuils de couleur des pastilles |
+| `prompts` | Consignes de chaque mode (système, réponse, HyDE), reformulation, réponse sans résultat, consigne d'OCR |
 
-    return enhanced_query
+Les réglages marqués `[RÉINDEXATION]` dans le fichier ne s'appliquent qu'aux documents indexés après la modification : pour les appliquer à l'ensemble du corpus, il faut vider le dossier de la base. Un extrait donne l'allure du fichier.
+
+```yaml
+recherche:
+  candidats_par_methode: 30
+  passages_retenus: 5
+  hyde: false
+  hybride: true
+  rerank: true
+  score_minimum: 0.03
+  voisins: 1
+  dedoublonnage: true
+  max_passages_par_document: 2
 ```
 
-### Exemple de prompt HyDE (mode administratif)
+## Le fichier `.env`
 
-> *"En tant qu'expert en administration publique française, rédige un document de référence détaillé qui répondrait à la question suivante : [QUESTION]"*
+La clé d'API et les surcharges propres à un poste ou à un environnement sont lues dans `.env` (un modèle `.env.example` est fourni). Une variable d'environnement l'emporte sur la valeur de `parametres.yaml`.
 
-## Étape 2 : Retrieval
+| Variable | Effet |
+|----------|-------|
+| `ALBERT_API_KEY` | Clé d'API Albert (obligatoire, jamais dans le YAML) |
+| `OCR_ENABLED`, `OCR_ENGINE` | Active l'OCR, choisit le moteur |
+| `USE_HYBRID_SEARCH`, `USE_HYDE`, `USE_RERANK` | Active ou désactive chaque étape de la recherche |
+| `PROMPT_MODE` | Mode de réponse par défaut |
+| `CUSTOM_*_PROMPT` | Remplace un prompt sans modifier le YAML |
+| `CHROMA_DB_PATH`, `DOCUMENTS_DIR` | Emplacement de la base et du dossier source |
+| `PARAMETRES_FILE` | Chemin d'un autre fichier de paramètres |
 
-Récupération des 30 documents les plus similaires via ChromaDB.
+## Validation au démarrage
 
-```python
-docs_initial = retriever.invoke(hyde_query)
-```
+`config.py` lit le YAML, contrôle le type de chaque valeur, signale les clés manquantes et vérifie que les prompts contiennent les variables obligatoires (`{context}` et `{query}` pour la réponse, `{query}` pour HyDE, `{history}` et `{query}` pour la reformulation). En cas de syntaxe YAML invalide, le message d'erreur indique le numéro de la ligne fautive. L'application s'arrête alors au démarrage, ce qui évite qu'une faute de frappe ne produise un comportement silencieusement dégradé. Les valeurs validées sont exposées sous forme de constantes que les autres modules importent.
 
-## Étape 3 : Reranking ALBERT
+::: {.callout-note}
+Dans un prompt, une accolade littérale s'écrit en la doublant (`{{` ou `}}`), faute de quoi elle est interprétée comme une variable.
+:::
 
-Le reranking utilise l'API ALBERT pour affiner la pertinence.
+# Chargement des documents
 
-```python
-def rerank_documents(query: str, docs: List, top_k: int = 5) -> List:
-    """Rerank avec ALBERT API"""
+Le module `loaders.py` choisit le lecteur d'après l'extension. La liste des extensions retenues est elle-même un paramètre (`documents.extensions`).
 
-    # Préparer les documents
-    doc_texts = [doc.page_content[:1000] for doc in docs]
+| Format | Traitement |
+|--------|------------|
+| PDF | Lecture page par page, OCR des pages scannées |
+| DOCX | Extraction du texte |
+| DOC (Word 97-2003) | Lecteur en Python pur (`doc_reader.py`), fondé sur la table des pièces de la spécification MS-DOC, sans LibreOffice ni Word |
+| ODT | Paragraphes et titres. Les pieds de page, les commentaires de relecture et le texte supprimé du suivi des modifications sont exclus |
+| TXT, MD | Lus comme du texte, avec essai successif des encodages configurés |
+| HTML, HTM | Extraction du texte |
+| EML | En-têtes, corps du message, pièces jointes chargées comme documents rattachés au courriel. Les images de signature sont ignorées |
+| PNG, JPG, JPEG, TIF, TIFF | OCR |
 
-    payload = {
-        "model": config.RERANK_MODEL,
-        "prompt": query,
-        "input": doc_texts,
-    }
+::: {.callout-note}
+Le lecteur `.doc` n'exige aucune installation externe. Il suit la structure de la spécification MS-DOC pour retrouver le texte, ce qui le rend utilisable sur un poste sans suite bureautique.
+:::
 
-    response = requests.post(
-        f"{config.ALBERT_BASE_URL}/rerank",
-        json=payload,
-        headers=headers
-    )
+# OCR
 
-    # Parser et stocker les scores
-    results = response.json()
-    reranked_docs = []
-    for r in sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]:
-        doc = docs[r["index"]]
-        doc.metadata["rerank_score"] = r["score"]
-        reranked_docs.append(doc)
+L'OCR est actif par défaut (`ocr.active`). Le moteur ouvert `openweight-ocr` suffit ; le moteur `mistral-ocr-2512` offre une meilleure précision, mais son accès est restreint, et le code replie automatiquement sur le modèle ouvert lorsqu'il n'est pas disponible.
 
-    return reranked_docs
-```
+## Détection des pages à lire
 
-## Étape 4 : Génération
+Une page PDF est considérée comme scannée lorsqu'elle contient moins de 50 caractères de texte (`caracteres_min_page`). Elle est alors rendue en image avec pypdfium2 à 200 dpi, le côté maximal étant ramené à 1 540 px, puis transmise au modèle. Les images insérées dans une page de texte sont également lues lorsqu'elles couvrent entre 10 % et 85 % de la page : en deçà, il s'agit le plus souvent de logos, au-delà, d'une page déjà scannée dotée d'une couche texte.
 
-Génération de la réponse finale avec le LLM.
+| Réglage | Valeur par défaut | Rôle |
+|---------|-------------------|------|
+| `dpi` | 200 | Résolution du rendu des pages |
+| `cote_max_pixels` | 1540 | Taille maximale de l'image envoyée |
+| `caracteres_min_page` | 50 | Seuil de détection d'une page scannée |
+| `part_image_min`, `part_image_max` | 0,10 et 0,85 | Part de la page couverte par une image à lire |
+| `pages_max`, `images_max` | 200 et 100 | Garde-fous par document |
+| `delai_max_secondes` | 180 | Attente maximale par appel |
 
-```python
-def rag_query(query: str, retriever, llm, mode: str = None):
-    """Exécute une requête RAG complète"""
+## Cache et nettoyage
 
-    # HyDE
-    hyde_query = generate_hyde(query, llm)
+Le résultat de chaque lecture est conservé sur disque dans `ocr_cache/<md5>_<moteur>.json`, à l'intérieur du dossier de la base. Une réindexation complète du corpus actuel (130 fichiers, 855 passages dont 199 issus de l'OCR) s'effectue ainsi en une vingtaine de secondes, aucun appel d'OCR n'étant répété. Le texte brut est ensuite nettoyé : les tableaux HTML sont convertis en Markdown, les boucles de répétition produites par certains modèles sont coupées et la consigne recopiée par le modèle est retirée.
 
-    # Retrieval
-    docs_initial = retriever.invoke(hyde_query)
+::: {.callout-warning}
+Le cache est indexé sur le contenu du fichier et sur le moteur. Changer de moteur déclenche donc de nouveaux appels, tandis que modifier la consigne d'OCR (`prompts.ocr`) ne vide pas le cache : il faut supprimer les fichiers concernés pour en tenir compte.
+:::
 
-    # Rerank
-    docs_final = rerank_documents(query, docs_initial, top_k=5)
+# Métadonnées de corpus et documents similaires
 
-    # Génération
-    context = "\n\n".join([d.page_content for d in docs_final])
-    rag_template = config.get_prompt_template("rag", mode=mode)
-    rag_prompt = PromptTemplate.from_template(rag_template)
+## Métadonnées tirées du chemin
 
-    chain = rag_prompt | llm | StrOutputParser()
-    answer = chain.invoke({"context": context, "query": query})
+Le module `corpus.py` déduit du chemin de chaque fichier des métadonnées stockées avec les passages dans Chroma.
 
-    return {
-        "answer": answer,
-        "sources": [d.metadata["source"] for d in docs_final],
-        "rerank_scores": [d.metadata["rerank_score"] for d in docs_final]
-    }
-```
+| Métadonnée | Origine | Usage |
+|------------|---------|-------|
+| `meeting_date` | Dossier nommé « jj mm aaaa », converti en entier AAAAMMJJ (motif `documents.motif_date_dossier`) | Filtre de période, tri des versions |
+| `validated` | Nom du fichier ou d'un dossier parent contenant « validée », « finale », « définitive » ou « signée » (sans accents ni majuscules) | Filtre, préférence lors du dédoublonnage |
+| `doc_title` | Nom du fichier | Affichage et en-tête contextuel |
+| `doc_family` | Même valeur pour les versions et les formats d'une même note | Dédoublonnage et plafond par document |
+| `chunk_index` | Position du passage dans le document | Recherche des voisins |
 
-## Streaming
+Les fichiers correspondant à un motif de `documents.exclure` (par exemple `ODJ*`) sont écartés avant toute lecture.
 
-La fonction `rag_query_stream` permet un streaming des tokens pour l'UI :
+## En-tête contextuel
 
-```python
-def rag_query_stream(query: str, retriever, llm, mode: str = None):
-    """RAG avec streaming"""
-    # ... pipeline RAG ...
+Avant l'indexation, chaque passage est précédé d'un en-tête de la forme `[titre | réunion du jj/mm/aaaa | version validée]`. Cet en-tête permet au modèle d'embeddings et à BM25 de distinguer des passages très proches issus de versions différentes. Sa longueur est mémorisée (`header_len`) afin de le retirer à l'affichage. Le réglage `decoupage.entete_contextuel` l'active.
 
-    # Stream les chunks
-    for chunk in chain.stream({"context": context, "query": query}):
-        yield {"type": "chunk", "content": chunk.content}
+## Regroupement des quasi-doublons
 
-    # Yielder métadonnées à la fin
-    yield {
-        "type": "metadata",
-        "sources": sources,
-        "rerank_scores": scores,
-        # ...
-    }
-```
+Une même note existe souvent en plusieurs versions et en plusieurs formats (PDF et ODT). Deux passages sont jugés quasi identiques lorsque leur similarité de Jaccard sur des 5-grammes de mots atteint `seuil_doublons` (0,85), ou lorsque l'un est inclus dans l'autre, à condition qu'il compte au moins 80 empreintes (`doublons_taille_min`), pour ne pas fusionner de simples blocs d'adresse. Le représentant du groupe est la version validée, puis la plus récente. Les autres sont conservés comme références « aussi dans » et signalés à l'utilisateur.
 
----
-
-# Applications Streamlit
-
-## Application de chat (`app_chat.py`)
-
-Interface principale pour interagir avec le système RAG.
-
-### Fonctionnalités
-
-- **Chat interactif** avec historique de conversation
-- **Modes de prompt** : Administratif, Technique, Créatif
-- **Documents temporaires** : Upload de documents pour la session
-- **Feedback utilisateur** : Thumbs up/down sur chaque réponse
-- **Sources collapsibles** : Affichage des documents consultés
-- **Copie de réponses** : Bouton de copie pour chaque message
-- **Mode développement** : Test sans appel API
+# Indexation
 
-### Architecture de l'application
+L'indexation, pilotée par `indexer.py`, est incrémentale. Le dossier source est parcouru, l'empreinte MD5 de chaque fichier est comparée à celle du fichier `index_metadata.json`, et seuls les fichiers nouveaux, modifiés ou supprimés donnent lieu à une mise à jour de la base.
 
-```python
-# Initialisation (cache)
-@st.cache_resource
-def init_rag_system():
-    embeddings = get_embeddings()
-    llm = get_llm()
-    logger = RAGLogger(config.RAG_LOGS_DB)
-    vectorstore, retriever = index_documents(embeddings)
-    return retriever, llm, logger
-
-# Configuration de la page
-st.set_page_config(
-    page_title="Chat-de-Calais",
-    page_icon="🐈",
-    layout="wide"
-)
-```
-
-### Gestion du feedback
-
-Le système enregistre les feedbacks utilisateurs (👍/👎) :
-
-```python
-# Traiter le feedback en attente
-if st.session_state.pending_feedback:
-    query_id, feedback_type = st.session_state.pending_feedback
-    if logger.update_feedback(query_id, feedback_type):
-        st.session_state.feedbacks_given.add(f"feedback_{query_id}")
-        st.toast(f"✅ Merci pour votre retour !", icon=emoji)
-        st.session_state.pending_feedback = None
-        st.rerun()
-```
-
-### Documents temporaires
-
-Module `temp_documents.py` permettant l'ajout de documents à la volée :
-
-```python
-def add_temp_documents(uploaded_files, embeddings):
-    """Ajoute des documents temporaires et réindexe"""
-
-    # Sauvegarder retriever original
-    if st.session_state.original_retriever is None:
-        st.session_state.original_retriever = st.session_state.retriever
-
-    # Charger nouveaux documents
-    for uploaded_file in uploaded_files:
-        doc_entry = load_and_store_document(uploaded_file)
-        st.session_state.temp_documents.append(doc_entry)
-
-    # Créer retriever temporaire
-    temp_retriever = create_temp_retriever(embeddings)
-    st.session_state.retriever = temp_retriever
-```
-
-## Dashboard de logs (`app_logs.py`)
-
-Dashboard de visualisation et analyse des logs RAG.
-
-### Métriques principales
-
-- Total de requêtes
-- Taux de succès
-- Temps d'exécution moyen
-- Documents moyens utilisés
-- Score de reranking moyen
-- **Taux de feedback** (👍/👎)
-- **Satisfaction utilisateur**
-
-### Visualisations
-
-1. **Répartition des feedbacks** (camembert)
-2. **Feedbacks par mode de prompt** (bar chart)
-3. **Évolution temporelle** des requêtes
-4. **Distribution des modes** utilisés
-5. **Temps d'exécution** par mode (box plot)
-6. **Distribution des scores** de reranking
-7. **Top sources** les plus utilisées
-
-### Filtres disponibles
-
-- Période (dernière heure, jour, 7j, 30j, tout)
-- Status (succès/erreurs)
-- Modes de prompt
-- **Feedback utilisateur** (positif/négatif/sans)
-
----
-
-# Base de données de logs (`logger.py`)
-
-## Schéma SQLite
-
-La table `rag_queries` stocke toutes les informations du pipeline :
-
-```sql
-CREATE TABLE rag_queries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
-    user_query TEXT NOT NULL,
-    hyde_query TEXT,
-    retrieved_docs_count INTEGER,
-    reranked_docs_count INTEGER,
-    final_answer TEXT,
-    sources TEXT,                    -- JSON array
-    rerank_scores TEXT,              -- JSON array
-    execution_time_seconds REAL,
-    error TEXT,
-    retrieved_docs_details TEXT,     -- JSON (premiers docs)
-    reranked_docs_details TEXT,      -- JSON (docs finaux)
-    prompt_mode TEXT,
-    user_feedback TEXT,              -- 'thumbs_up' ou 'thumbs_down'
-    feedback_timestamp TEXT
-);
-```
-
-## Classe RAGLogger
-
-```python
-class RAGLogger:
-    def log_query(self, user_query, hyde_query, retrieved_docs, 
-                  reranked_docs, final_answer, sources, 
-                  rerank_scores, execution_time, error, 
-                  prompt_mode) -> int:
-        """Log une requête RAG complète"""
-        # Insert dans SQLite
-        # Retourne query_id
-
-    def update_feedback(self, query_id: int, feedback: str) -> bool:
-        """Met à jour le feedback utilisateur"""
-        # UPDATE user_feedback
-
-    def get_stats(self) -> dict:
-        """Calcule les statistiques globales"""
-        # Agrégations SQL
-```
-
-## Traçabilité complète
-
-Chaque requête enregistre :
-
-- Question originale et query HyDE
-- Nombre de documents à chaque étape
-- Détails des documents (source + extrait)
-- Scores de reranking
-- Réponse finale générée
-- Temps d'exécution
-- Erreurs éventuelles
-- Mode de prompt utilisé
-- **Feedback utilisateur avec timestamp**
-
----
-
-# Utilitaires
-
-## Client ALBERT (`albert_client.py`)
-
-Wrapper pour l'API ALBERT :
-
-```python
-def get_embeddings():
-    """Client embeddings ALBERT"""
-    return OpenAIEmbeddings(
-        model=config.EMBEDDINGS_MODEL,
-        api_key=config.ALBERT_API_KEY,
-        base_url=config.ALBERT_BASE_URL,
-        **config.EMBEDDINGS_CONFIG
-    )
-
-def get_llm():
-    """Client LLM ALBERT"""
-    return ChatOpenAI(
-        model=config.LLM_MODEL,
-        api_key=config.ALBERT_API_KEY,
-        base_url=config.ALBERT_BASE_URL,
-        temperature=config.LLM_TEMPERATURE,
-    )
-```
-
-## Formatage de sources (`utils_app.py`)
-
-```python
-def format_sources(sources: List[str], scores: List[float]) -> str:
-    """Formate les sources en HTML pour affichage"""
-    html = "<div style='font-size: 0.9em;'>"
-    for i, (src, score) in enumerate(zip(sources, scores), 1):
-        source_name = Path(src).name
-        score_str = f"<b>[{score:.3f}]</b>" if score else ""
-        html += f"<p>{i}. {score_str} {source_name}</p>"
-    html += "</div>"
-    return html
-```
-
-## Visualisation CLI (`view_logs.py`)
-
-Script CLI pour consulter les logs sans interface web :
+| Paramètre | Valeur par défaut |
+|-----------|-------------------|
+| Taille d'un passage (`decoupage.taille`) | 2 000 caractères |
+| Chevauchement (`decoupage.chevauchement`) | 400 caractères |
+| Séparateurs préférés | paragraphe, ligne, phrase, espace |
+| Taille de lot d'embeddings (`base.taille_lot`) | 50 passages |
+| Collection Chroma | `documents_rag` |
+
+Chaque passage reçoit un `chunk_index`, indispensable à l'élargissement aux voisins. Les fichiers qui ne produisent aucun contenu, ou dont l'ajout à la base échoue, ne sont pas considérés comme indexés : ils sont retentés au lancement suivant. L'index BM25 est tenu en mémoire et reconstruit à chaque démarrage à partir de la base.
+
+::: {.callout-warning}
+Modifier le modèle d'embeddings, le découpage, les mots de version validée ou le motif de date impose de vider le dossier `chroma_db_rag/` : l'indexation incrémentale ne détecte que les changements de fichiers, non les changements de réglages.
+:::
+
+# Recherche hybride
+
+Le module `retrieval.py` combine deux méthodes complémentaires, chacune ramenant 30 candidats (`candidats_par_methode`).
+
+| Méthode | Requête utilisée | Principe |
+|---------|------------------|----------|
+| Vectorielle (Chroma) | La question (ou, si HyDE est activé, la réponse hypothétique qu'il produit) | Proximité de sens |
+| BM25 (`rank_bm25`) | Question d'origine | Correspondance de mots exacts, tokenisation française sans accents ni mots vides, nombres conservés |
+
+Les deux classements sont fusionnés par Reciprocal Rank Fusion, avec `rrf_k = 60`. Le score d'un passage est la somme, sur les deux classements, de 1/(k + rang). La recherche lexicale rattrape les numéros d'articles, les noms propres et les références que la proximité sémantique manque.
+
+## Filtres
+
+L'interface permet de restreindre la recherche à une période de réunion et aux seules versions validées. Le filtre s'exprime sous la forme d'une clause `where` pour Chroma et d'un filtre équivalent côté BM25. Les documents temporaires ajoutés par l'utilisateur ne sont jamais filtrés.
+
+# Pipeline de question
+
+Le fichier `rag_pipeline.py` expose le générateur `iter_retrieval_steps`, qui enchaîne les étapes suivantes et émet à chacune un événement de statut (étape, détail, temps écoulé) consommé par l'interface.
+
+| N° | Étape | Description |
+|----|-------|-------------|
+| 1 | Reformulation | Pour une question de suivi, les 3 derniers échanges (`tours_historique`) servent à produire une question autonome. Une question qui change de sujet est recopiée telle quelle |
+| 2 | HyDE (facultatif, désactivé par défaut) | Si l'option est activée, le modèle rédige une réponse hypothétique dont l'embedding sert à la recherche vectorielle. Sinon, la recherche vectorielle utilise directement la question |
+| 3 | Recherche | Recherche hybride et fusion RRF, avec les filtres éventuels |
+| 4 | Dédoublonnage | Regroupement des passages quasi identiques, avec mention « aussi dans » |
+| 5 | Rerank | Les 30 meilleurs candidats (`candidats_a_trier`) sont notés par le modèle de rerank. La fonction renvoie des copies et ne modifie pas les passages partagés |
+| 6 | Seuil | Les passages dont le score est inférieur à `score_minimum` (0,03) sont écartés. Si aucun ne reste, le modèle n'est pas appelé et un message explicite est renvoyé |
+| 7 | Plafond | Au plus 2 passages par document (famille et date), puis 5 passages en tout |
+| 8 | Voisins | Chaque passage retenu est complété par ses voisins (`voisins: 1`), le chevauchement étant fusionné |
+| 9 | Rédaction | Le contexte est numéroté `[n]`, avec source, date et statut. La consigne demande de citer les numéros, de privilégier la version validée la plus récente et de signaler les divergences entre versions |
+
+Les étapes HyDE, hybride et rerank s'activent ou se désactivent individuellement (clés `hyde`, `hybride`, `rerank`, ou variables `.env`), ce qui sert notamment à l'évaluation.
+
+::: {.callout-note}
+HyDE est désactivé par défaut. L'évaluation n'a mesuré aucun gain dès lors que la recherche hybride est active, alors qu'il ajoute environ 15 s d'attente par question (0,4 s sans). Il reste disponible en option (`recherche.hyde: true` ou `USE_HYDE=true`).
+:::
+
+::: {.callout-note}
+Si `recherche.score_minimum` est trop élevé, l'assistant répond trop souvent qu'il n'a rien trouvé. S'il est trop bas, des passages hors sujet atteignent le modèle. La commande `python evaluate.py --seuils` aide à choisir la valeur (voir la section Évaluation).
+:::
+
+# Interface
+
+L'application de chat (`app_chat.py`, `utils_app.py`, `temp_documents.py`) tire du fichier de paramètres l'avatar, les textes d'accueil, les libellés des étapes et les modes de réponse.
+
+## Déroulement d'une question
+
+Pendant le traitement, un statut animé affiche l'étape en cours, son détail et un chronomètre en direct. À l'issue de la recherche, il se replie sur « Sources trouvées en x s », puis la réponse est diffusée progressivement et sa durée affichée (« Réponse en y s »).
+
+## Sources et filtres
+
+Les sources apparaissent en onglets numérotés comme les citations de la réponse. Chacune présente l'extrait utilisé, des pastilles de date et de statut, le score de pertinence (coloré selon `score_vert` et `score_orange`), la mention OCR le cas échéant, les documents « aussi dans », un aperçu de la page PDF et un bouton d'ouverture du document. Lorsque le meilleur score reste inférieur à `score_alerte` (0,1), un avertissement signale des sources peu pertinentes. La barre latérale offre les filtres de période et de version validée.
+
+## Modes, documents temporaires et retours
+
+Trois modes de réponse sont proposés : administratif, technique et créatif, chacun disposant de ses propres prompts. L'utilisateur peut déposer des documents temporaires, qui sont interrogés avec la base permanente ou seuls, et qui disparaissent avec la session. Un pouce haut ou bas accompagne chaque réponse et alimente le journal.
+
+# Journalisation et tableau de bord
+
+Chaque question est enregistrée dans la base SQLite `rag_logs.db` (chemin `base.journal_requetes`), table `rag_queries`.
+
+| Champ | Contenu |
+|-------|---------|
+| `id`, `timestamp` | Identifiant et horodatage |
+| `user_query`, `hyde_query` | Question posée et requête HyDE |
+| `retrieved_docs_count`, `reranked_docs_count` | Nombre de passages avant et après rerank |
+| `final_answer` | Réponse produite |
+| `sources`, `rerank_scores` | Sources et scores (JSON) |
+| `retrieved_docs_details`, `reranked_docs_details` | Détail des passages à chaque étape (JSON) |
+| `execution_time_seconds`, `error` | Durée et erreur éventuelle |
+| `prompt_mode` | Mode de réponse |
+| `user_feedback`, `feedback_timestamp` | Retour de l'utilisateur et sa date |
+
+Le tableau de bord `app_logs.py` présente le volume de requêtes, le taux de succès, le temps moyen, le nombre moyen de documents, le score de rerank moyen, le taux de retour et la satisfaction. Il propose en outre l'analyse des retours, la répartition par mode, l'évolution dans le temps, les sources les plus citées, le détail d'une requête et un export. Des filtres de période, de statut, de mode et de retour s'appliquent à l'ensemble. Le script `view_logs.py` offre une consultation en ligne de commande.
 
 ```bash
-# Voir les dernières requêtes
 python view_logs.py recent --limit 10
-
-# Détail d'une requête
 python view_logs.py detail 42
-
-# Statistiques globales
 python view_logs.py stats
-
-# Recherche
 python view_logs.py search "urbanisme" --limit 5
 ```
 
----
+# Évaluation
 
-# Déploiement
+L'évaluation mesure la qualité de la recherche et du seuil de pertinence sur un jeu de questions maîtrisé. Le rapport complet figure dans `evaluation/rapport_evaluation.md`. La sous-section Résultats en reprend les éléments principaux.
 
-## Installation
+## Jeu de questions
+
+Le fichier `evaluation/questions.yaml` contient 55 questions : 49 dont la réponse figure dans un document connu, et 6 hors sujet, destinées à vérifier que l'assistant s'abstient de répondre.
+
+## Indicateurs
+
+| Indicateur | Définition |
+|------------|-----------|
+| Succès | Le document attendu figure parmi les passages retenus au seuil considéré |
+| Rappel de la recherche | Le document attendu figure parmi les candidats, avant rerank |
+| MRR | Moyenne de l'inverse du rang du premier bon document |
+| Rejet des questions hors sujet | Part des questions hors sujet pour lesquelles aucun passage ne franchit le seuil |
+| Documents distincts | Diversité des documents dans les passages retenus |
+| Doublons | Nombre de passages redondants conservés |
+| Durée | Temps de traitement par question |
+
+## Utilisation
+
+Le script `evaluate.py` initialise le pipeline puis écrit un fichier CSV dans `evaluation/resultats/`, dont le nom reprend les réglages testés.
+
+| Option | Effet |
+|--------|-------|
+| `--no-hyde`, `--no-hybrid`, `--no-rerank`, `--no-dedup` | Désactive l'étape correspondante |
+| `--max-per-doc N` | Teste un autre plafond par document (0 pour le supprimer) |
+| `--min-score X` | Teste un autre seuil de pertinence |
+| `--seuils a,b,c` | Simule plusieurs seuils sans nouvel appel à l'API |
+| `--base DOSSIER` | Évalue une autre base Chroma |
+| `--generate` | Produit aussi les réponses |
+| `--label TEXTE`, `--questions FICHIER` | Suffixe du nom de sortie, autre jeu de questions |
 
 ```bash
-# Créer environnement
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
-
-# Installer dépendances
-pip install -r requirements.txt
+python evaluate.py
+python evaluate.py --no-rerank --label sans_rerank
+python evaluate.py --seuils 0.005,0.03,0.1
 ```
 
-## Configuration
+::: {.callout-note}
+Comparer deux configurations exige de ne changer qu'un réglage à la fois et de conserver le même jeu de questions. L'option `--seuils` est la voie la plus économique pour calibrer le seuil, car elle réutilise les scores d'un seul passage.
+:::
 
-Créer un fichier `.env` :
+## Résultats
+
+Le tableau reprend les variantes principales du rapport. Chaque variante retire ou modifie un seul élément de la configuration de référence (recherche hybride, rerank, dédoublonnage, plafond de 2 passages par document, 5 passages au plus, seuil de 0,03, HyDE désactivé, en-tête contextuel). Le succès et le rejet portent respectivement sur les 49 questions documentées et sur les 6 questions hors sujet.
+
+| Variante | Succès | Rejet hors sujet | MRR | Doublons par réponse | Durée (s) |
+|----------|--------|------------------|-----|----------------------|-----------|
+| Référence | 1,00 | 1,00 | 0,97 | 0,00 | 0,39 |
+| Avec HyDE | 1,00 | 1,00 | 0,98 | 0,00 | 15,12 |
+| Sans dédoublonnage | 1,00 | 1,00 | 0,96 | 1,05 | 0,33 |
+| Sans recherche hybride | 0,18 | 1,00 | 0,18 | 0,00 | 0,35 |
+| Sans rerank | 0,92 | 0,00 | 0,48 | 0,00 | 0,11 |
+| Sans en-tête contextuel | 1,00 | 1,00 | 0,93 | 0,00 | 0,32 |
+
+La référence retrouve la bonne source pour les 49 questions documentées et rejette les 6 questions hors sujet. Les enseignements sont les suivants.
+
+- La recherche hybride est indispensable : la recherche vectorielle seule ne réussit que dans 18 % des cas.
+- Le rerank assure le classement (MRR de 0,97 contre 0,48) et, à lui seul, le rejet des questions hors sujet.
+- HyDE n'apporte aucun gain mesuré avec BM25 et coûte environ 15 s par question, d'où sa désactivation.
+- Le dédoublonnage supprime les passages redondants (1,05 par réponse sans lui, aucun avec).
+- Une trentaine de chiffres cités dans les réponses générées ont été contrôlés, tous exacts.
+
+Les décisions qui en découlent sont appliquées dans `parametres.yaml`.
+
+| Paramètre | Décision |
+|-----------|----------|
+| `recherche.hyde` | `false` par défaut, conservé en option |
+| `recherche.score_minimum` | 0,03 (au lieu de 0,01) |
+| `recherche.score_alerte` et pastille orange | 0,1 |
+| Dédoublonnage | Critère combiné, taille minimale de 80 empreintes |
+| En-tête contextuel et plafond par document | Conservés |
+
+::: {.callout-warning}
+Les 55 questions ont été rédigées à partir des documents, avec leur vocabulaire, ce qui avantage la recherche lexicale. Avec des formulations d'agents (synonymes, paraphrases), la recherche par le sens et HyDE pourraient peser davantage : l'inutilité de HyDE ne doit pas être tenue pour définitive.
+:::
+
+# Tests et intégration continue
+
+Environ 100 tests `pytest` couvrent les paramètres, le corpus, l'OCR, les chargeurs, la recherche, le pipeline et l'évaluation. L'API Albert y est simulée : aucun appel réseau n'est émis et aucune clé réelle n'est nécessaire.
+
+| Fichier | Objet |
+|---------|-------|
+| `test_parametres.py`, `test_config.py`, `test_prompts.py` | Lecture, validation et prompts |
+| `test_corpus.py` | Métadonnées, en-tête, dédoublonnage, filtres |
+| `test_ocr.py`, `test_loaders.py` | OCR et lecteurs de formats (fixtures dans `tests/fixtures/`) |
+| `test_indexer.py` | Indexation incrémentale |
+| `test_retrieval.py` | BM25, fusion RRF |
+| `test_rag_pipeline.py`, `test_pipeline_qualite.py`, `test_integration.py` | Enchaînement des étapes, contexte élargi aux voisins |
+| `test_evaluate.py` | Calcul des indicateurs |
+| `test_logger.py` | Journal SQLite |
+
+L'intégration continue est assurée par GitHub Actions (`.github/workflows/tests.yml`) et par un équivalent GitLab (`.gitlab-ci.yml`), qui installent les dépendances puis lancent `pytest` avec une clé factice.
+
+# Exploitation
+
+## Installation et commandes
 
 ```bash
-ALBERT_API_KEY=votre_clé_api
-PROMPT_MODE=administratif
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env          # puis renseigner ALBERT_API_KEY
+
+python main.py                # indexation des documents
+streamlit run app_chat.py     # application de chat
+streamlit run app_logs.py     # tableau de bord
+python evaluate.py            # évaluation
+pytest                        # tests
 ```
 
-## Lancement
+## Réindexation
 
-```bash
-# Indexer les documents
-python main.py
+L'ajout, la modification ou la suppression de fichiers dans `documents/` est pris en compte par un simple `python main.py` (ou au démarrage de l'application). Pour appliquer un réglage de découpage, d'embeddings ou de métadonnées, il faut supprimer le contenu du dossier de la base, puis relancer l'indexation. Le cache OCR étant stocké dans ce dossier, on peut le conserver en ne supprimant que les autres éléments, ce qui évite de répéter les appels d'OCR.
 
-# Lancer l'application de chat
-streamlit run app_chat.py
-
-# Lancer le dashboard de logs
-streamlit run app_logs.py
-```
+::: {.callout-warning}
+Supprimer entièrement `chroma_db_rag/` supprime aussi `ocr_cache/`. Sur un corpus riche en documents scannés, la réindexation suivante rappelle alors le modèle d'OCR pour chaque page.
+:::
 
 ## Structure des dossiers
 
-```
+```text
 chat-de-calais/
-├── config.py                 # Configuration centralisée
-├── albert_client.py          # Client API ALBERT
-├── loaders.py                # Chargeurs de documents
-├── indexer.py                # Indexation incrémentale
-├── rag_pipeline.py           # Pipeline RAG principal
-├── logger.py                 # Logging SQLite
-├── app_chat.py               # Application chat Streamlit
-├── app_logs.py               # Dashboard logs Streamlit
-├── temp_documents.py         # Gestion docs temporaires
-├── utils_app.py              # Utilitaires UI
-├── view_logs.py              # CLI de logs
-├── main.py                   # Script d'indexation
-├── requirements.txt          # Dépendances Python
-├── documents/                # Dossier documents à indexer
-├── chroma_db_rag/            # Base vectorielle ChromaDB
-└── rag_logs.db               # Base de logs SQLite
+├── parametres.yaml        # réglages modifiables sans code
+├── .env / .env.example    # clé d'API et surcharges
+├── config.py              # lecture et validation des paramètres
+├── albert_client.py       # clients Albert
+├── loaders.py             # chargeurs et OCR
+├── doc_reader.py          # lecteur .doc en Python pur
+├── corpus.py              # métadonnées, doublons, filtres
+├── indexer.py             # indexation incrémentale
+├── retrieval.py           # recherche hybride
+├── rag_pipeline.py        # pipeline de question
+├── app_chat.py            # interface de chat
+├── app_logs.py            # tableau de bord
+├── temp_documents.py      # documents temporaires
+├── utils_app.py           # utilitaires d'interface
+├── logger.py, view_logs.py
+├── evaluate.py            # évaluation
+├── main.py                # point d'entrée de l'indexation
+├── documents/             # corpus source
+├── chroma_db_rag/         # base Chroma, ocr_cache/, index_metadata.json
+├── rag_logs.db            # journal des requêtes
+├── evaluation/            # questions.yaml, resultats/, rapport
+├── tests/                 # tests pytest et fixtures
+└── docs/                  # documentation et présentation
 ```
-
-
-
----
 
 # Annexes
 
-## Bibliographie
+## Références
 
-- [ALBERT API Documentation](https://albert.api.etalab.gouv.fr/)
-- [LangChain Documentation](https://python.langchain.com/)
-- [HyDE Paper (Gao et al. 2022)](https://arxiv.org/abs/2212.10496)
-- [Streamlit Documentation](https://docs.streamlit.io/)
+- [API Albert](https://albert.api.etalab.gouv.fr/)
+- [Documentation de LangChain](https://python.langchain.com/)
+- [HyDE, Gao et al. (2022)](https://arxiv.org/abs/2212.10496)
+- [Documentation de Streamlit](https://docs.streamlit.io/)
 
 ## Licence
 
-https://www.cerema.fr/fr/presse/document/conditions-generales-intervention-du-cerema
+Voir les [conditions générales d'intervention du Cerema](https://www.cerema.fr/fr/presse/document/conditions-generales-intervention-du-cerema).
 
 ## Contact
 
-Pour toute question : [romain.cadot@cerema.fr]
+Pour toute question : [romain.cadot@cerema.fr](mailto:romain.cadot@cerema.fr)

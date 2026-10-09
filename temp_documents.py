@@ -2,13 +2,65 @@
 """Gestion des documents temporaires pour une session utilisateur."""
 
 import tempfile
+import uuid
+from itertools import zip_longest
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import streamlit as st
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from indexer import split_documents
 from loaders import load_document
+from retrieval import make_retriever
 import config
+
+
+class CombinedRetriever:
+    """Interroge plusieurs retrievers et entrelace leurs résultats par rang."""
+
+    supports_keyword_query = True
+
+    def __init__(self, retrievers: List[Any]):
+        """
+        Args:
+            retrievers: Retrievers à combiner (les None sont ignorés)
+        """
+        self.retrievers = [r for r in retrievers if r is not None]
+
+    def invoke(
+        self, query: str, keyword_query: str = None, filters: Dict[str, Any] = None
+    ) -> List[Document]:
+        """
+        Retourne les documents de chaque retriever, entrelacés par rang.
+
+        Les filtres de corpus ne s'appliquent qu'au premier retriever (base
+        permanente) : les documents temporaires sont toujours interrogés.
+        """
+        results = []
+        for position, r in enumerate(self.retrievers):
+            if getattr(r, "supports_keyword_query", False) is True:
+                kwargs = {"keyword_query": keyword_query}
+                if position == 0 and filters:
+                    kwargs["filters"] = filters
+                results.append(r.invoke(query, **kwargs))
+            else:
+                results.append(r.invoke(query))
+        merged = []
+        for group in zip_longest(*results):
+            merged.extend(d for d in group if d is not None)
+        return merged
+
+    def get_neighbors(
+        self, doc: Document, window: int
+    ) -> Tuple[List[Document], List[Document]]:
+        """Voisins du chunk, cherchés dans le premier retriever qui le connaît."""
+        for retriever in self.retrievers:
+            get_neighbors = getattr(retriever, "get_neighbors", None)
+            if callable(get_neighbors):
+                before, after = get_neighbors(doc, window)
+                if before or after:
+                    return before, after
+        return [], []
 
 
 def init_temp_session():
@@ -19,6 +71,29 @@ def init_temp_session():
         st.session_state.temp_dir = tempfile.mkdtemp()
     if "original_retriever" not in st.session_state:
         st.session_state.original_retriever = None
+    if "temp_vectorstore" not in st.session_state:
+        st.session_state.temp_vectorstore = None
+    if "temp_retriever" not in st.session_state:
+        st.session_state.temp_retriever = None
+    if "temp_only" not in st.session_state:
+        st.session_state.temp_only = False
+
+
+def apply_session_retriever():
+    """
+    Positionne le retriever de session : base permanente et documents
+    temporaires combinés, ou documents temporaires seuls si demandé.
+    """
+    temp_retriever = st.session_state.temp_retriever
+    original = st.session_state.original_retriever
+    if temp_retriever is None:
+        if original is not None:
+            st.session_state.retriever = original
+        return
+    if st.session_state.temp_only or original is None:
+        st.session_state.retriever = temp_retriever
+    else:
+        st.session_state.retriever = CombinedRetriever([original, temp_retriever])
 
 
 def save_uploaded_file(uploaded_file) -> Path:
@@ -50,8 +125,8 @@ def load_and_store_document(uploaded_file) -> Dict[str, Any]:
     # Sauvegarder le fichier
     temp_path = save_uploaded_file(uploaded_file)
 
-    # Charger et découper
-    docs = load_document(str(temp_path))
+    # Charger et découper (même découpage que l'indexation permanente)
+    docs = split_documents(load_document(str(temp_path)))
 
     # Créer l'entrée
     doc_entry = {
@@ -87,19 +162,26 @@ def create_temp_retriever(embeddings, permanent_docs: List[Document] = None):
     else:
         all_docs = permanent_docs + all_temp_docs
 
+    # Supprimer la collection précédente : sinon les clients Chroma éphémères
+    # partagent la collection et les documents s'y accumulent en double.
+    previous = st.session_state.get("temp_vectorstore")
+    if previous is not None:
+        try:
+            previous.delete_collection()
+        except Exception:
+            pass
+        st.session_state.temp_vectorstore = None
+
     # Créer un vectorstore en mémoire
     if all_docs:
         vectorstore = Chroma.from_documents(
             documents=all_docs,
             embedding=embeddings,
-            collection_name=f"session_{id(st.session_state)}",
+            collection_name=f"session_{uuid.uuid4().hex[:12]}",
         )
+        st.session_state.temp_vectorstore = vectorstore
 
-        retriever = vectorstore.as_retriever(
-            search_kwargs={"k": config.RAG_TOP_N_RETRIEVAL}
-        )
-
-        return retriever
+        return make_retriever(vectorstore, docs=all_docs)
 
     return None
 
@@ -133,13 +215,11 @@ def add_temp_documents(uploaded_files, embeddings) -> tuple[int, int]:
             except Exception as e:
                 st.error(f"❌ Erreur avec {uploaded_file.name}: {str(e)}")
 
-    # Réindexer si de nouveaux docs
+    # Réindexer si de nouveaux docs (les docs permanents restent interrogés
+    # via leur propre retriever, sans être réindexés)
     if new_docs_count > 0:
-        # Créer retriever temporaire (sans docs permanents pour éviter duplication)
-        temp_retriever = create_temp_retriever(embeddings)
-
-        if temp_retriever:
-            st.session_state.retriever = temp_retriever
+        st.session_state.temp_retriever = create_temp_retriever(embeddings)
+        apply_session_retriever()
 
     return new_docs_count, total_chunks
 
@@ -157,20 +237,23 @@ def remove_temp_document(doc_name: str, embeddings):
         d for d in st.session_state.temp_documents if d["name"] != doc_name
     ]
 
-    # Réindexer
-    if st.session_state.temp_documents:
-        temp_retriever = create_temp_retriever(embeddings)
-        if temp_retriever:
-            st.session_state.retriever = temp_retriever
-    else:
-        # Restaurer le retriever original
-        if st.session_state.original_retriever:
-            st.session_state.retriever = st.session_state.original_retriever
+    # Réindexer (create_temp_retriever renvoie None s'il ne reste rien,
+    # ce qui restaure le retriever original)
+    st.session_state.temp_retriever = create_temp_retriever(embeddings)
+    apply_session_retriever()
 
 
 def clear_all_temp_documents():
     """Efface tous les documents temporaires et restaure le retriever original."""
     st.session_state.temp_documents = []
+    st.session_state.temp_retriever = None
+    previous = st.session_state.get("temp_vectorstore")
+    if previous is not None:
+        try:
+            previous.delete_collection()
+        except Exception:
+            pass
+        st.session_state.temp_vectorstore = None
 
     # Restaurer le retriever original
     if st.session_state.original_retriever:
@@ -224,7 +307,7 @@ def render_temp_documents_section(embeddings):
     # File uploader
     uploaded_files = st.file_uploader(
         "Ajouter des documents",
-        type=["pdf", "txt", "md", "docx", "doc", "odt", "html", "htm"],
+        type=[ext.lstrip(".") for ext in config.SUPPORTED_EXTENSIONS],
         accept_multiple_files=True,
         help="Documents valables uniquement pour cette session",
         key="temp_doc_uploader",
@@ -245,6 +328,13 @@ def render_temp_documents_section(embeddings):
     info = get_temp_docs_info()
 
     if info["count"] > 0:
+        st.checkbox(
+            "Interroger uniquement ces documents",
+            key="temp_only",
+            help="Sinon, la base permanente est aussi interrogée",
+        )
+        apply_session_retriever()
+
         st.write(f"**📊 {info['count']} document(s) actif(s)**")
         st.caption(
             f"Total: {info['total_chunks']} chunks • {format_file_size(info['total_size'])}"

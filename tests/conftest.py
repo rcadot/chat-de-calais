@@ -13,7 +13,18 @@ def temp_dir():
     """Crée un répertoire temporaire."""
     temp = tempfile.mkdtemp()
     yield temp
-    shutil.rmtree(temp)
+    # Chroma garde ses fichiers ouverts (verrou sous Windows) : on libère ses
+    # clients en cache avant de supprimer le dossier.
+    try:
+        from chromadb.api.shared_system_client import SharedSystemClient
+
+        SharedSystemClient.clear_system_cache()
+    except ImportError:
+        pass
+    import gc
+
+    gc.collect()
+    shutil.rmtree(temp, ignore_errors=True)
 
 @pytest.fixture
 def temp_documents_dir(temp_dir):

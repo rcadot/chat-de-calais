@@ -15,13 +15,22 @@ python-docx>=1.0.0
 docx2txt>=0.8
 odfpy>=1.4.1
 unstructured>=0.11.0
+olefile>=0.46  # .doc Word 97-2003
+beautifulsoup4>=4.12  # corps HTML des courriels .eml
+
+# OCR (rendu des pages PDF scannées)
+pypdfium2>=4.30
+pillow>=10.0
+
+# Recherche hybride (BM25)
+rank_bm25>=0.2.2
 
 # Utils
 python-dotenv>=1.0.0
 requests>=2.31.0
 pyyaml>=6.0.1  # Optionnel si vous gardez YAML
 
-streamlit
+streamlit>=1.52  # téléchargement différé (st.download_button)
 openai
 streamlit-extras
 st_copy

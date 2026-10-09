@@ -1,0 +1,285 @@
+# =============================================================================
+#  PARAMÈTRES DE CHAT DE CALAIS
+# =============================================================================
+#
+#  Ce fichier rassemble tout ce qui peut être modifié sans toucher au code :
+#  modèles, adresses, réglages de la recherche, textes de l'interface, prompts.
+#
+#  Règles d'écriture (format YAML) :
+#  - l'indentation compte : utiliser des espaces, jamais de tabulations ;
+#  - le texte après « # » est un commentaire, ignoré par l'application ;
+#  - true / false pour activer ou désactiver une option ;
+#  - un texte sur plusieurs lignes commence par « | » suivi d'un retour à la
+#    ligne, puis chaque ligne est indentée.
+#
+#  Après une modification :
+#  - relancer l'application (Ctrl+C puis « streamlit run app_chat.py ») ;
+#  - les réglages marqués [RÉINDEXATION] ne s'appliquent qu'aux documents
+#    indexés après le changement : vider le dossier de la base pour tout
+#    réindexer.
+#
+#  En cas d'erreur (clé mal orthographiée, mauvais type), l'application
+#  s'arrête au démarrage avec un message qui indique la ligne fautive.
+#
+#  La clé d'API Albert ne se met pas ici mais dans le fichier .env.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# API Albert : adresse et modèles
+# -----------------------------------------------------------------------------
+# Liste des modèles disponibles pour votre clé :
+#   https://albert.api.etalab.gouv.fr/v1/models (avec la clé d'API)
+albert:
+  url: https://albert.api.etalab.gouv.fr/v1
+  modele_reponse: openweight-medium          # rédige les réponses
+  temperature: 0.1                           # 0 = factuel et stable, 1 = plus varié
+  modele_embeddings: openweight-embeddings   # [RÉINDEXATION] représente le sens des textes
+  modele_rerank: openweight-rerank           # trie les passages par pertinence
+  modele_ocr: openweight-ocr                 # lit les pages scannées (accès ouvert)
+  modele_ocr_mistral: mistral-ocr-2512       # OCR plus précis, accès restreint
+  tentatives: 3                              # nouvelles tentatives en cas d'échec réseau
+  delai_max_secondes: 60                     # attente maximale d'une réponse de l'API
+
+
+# -----------------------------------------------------------------------------
+# Documents à indexer
+# -----------------------------------------------------------------------------
+documents:
+  dossier: ./documents
+  # Formats lus. Les images sont lues par OCR.
+  extensions: [.pdf, .docx, .doc, .odt, .txt, .md, .html, .htm, .eml, .png, .jpg, .jpeg, .tif, .tiff]
+  # Fichiers à ignorer, par motif de nom (* = n'importe quels caractères).
+  # Exemple pour écarter les ordres du jour : ["ODJ*"]
+  exclure: []
+  # Mots qui, dans le nom du fichier ou d'un dossier parent, signalent une
+  # version validée (comparaison sans accents ni majuscules). [RÉINDEXATION]
+  mots_version_validee: [validee, finale, definitive, signee]
+  # Motif de la date de réunion dans le nom des dossiers (ici « 08 04 2024 »,
+  # jour mois année). Expression régulière à 3 groupes : jour, mois, année.
+  # [RÉINDEXATION]
+  motif_date_dossier: '(\d{2})[ ._-](\d{2})[ ._-](\d{4})'
+  # Encodages essayés, dans l'ordre, pour les fichiers texte.
+  encodages_texte: [utf-8, latin-1, cp1252, iso-8859-1]
+
+
+# -----------------------------------------------------------------------------
+# Base de données
+# -----------------------------------------------------------------------------
+base:
+  dossier: ./chroma_db_rag          # base vectorielle (supprimer pour tout réindexer)
+  collection: documents_rag
+  taille_lot: 50                    # passages envoyés ensemble au calcul d'embeddings
+  journal_requetes: ./rag_logs.db   # historique des questions et retours (tableau de bord)
+
+
+# -----------------------------------------------------------------------------
+# Découpage des documents en passages  [RÉINDEXATION]
+# -----------------------------------------------------------------------------
+decoupage:
+  taille: 2000            # longueur maximale d'un passage, en caractères
+  chevauchement: 400      # caractères répétés entre deux passages consécutifs
+  separateurs: ["\n\n", "\n", ". ", "! ", "? ", " ", ""]   # points de coupure préférés
+  # Ajoute en tête de chaque passage le titre du document, la date de réunion
+  # et le statut (validé ou non) : aide à distinguer des passages très proches
+  # issus de versions différentes.
+  entete_contextuel: true
+
+
+# -----------------------------------------------------------------------------
+# Recherche des passages
+# -----------------------------------------------------------------------------
+recherche:
+  candidats_par_methode: 30      # passages remontés par chaque méthode de recherche
+  candidats_a_trier: 30          # passages transmis au tri par pertinence
+  passages_retenus: 5            # passages utilisés pour rédiger la réponse
+  # HyDE : imagine une réponse type pour mieux chercher par le sens.
+  # Désactivé : sur le jeu d'évaluation, aucun gain de pertinence avec la
+  # recherche hybride, mais 14 s d'attente en plus par question.
+  hyde: false
+  hybride: true                  # recherche par le sens ET par mots-clés exacts
+  rrf_k: 60                      # lissage de la fusion des deux recherches (60 est l'usage)
+  rerank: true                   # tri des passages par le modèle de rerank
+  # Score de pertinence (0 à 1) en dessous duquel un passage est écarté.
+  # Si aucun passage ne passe, l'assistant répond qu'il n'a rien trouvé.
+  # Calibrage (evaluation/rapport_evaluation.md) : questions hors sujet au plus
+  # 0,005, bonne source d'une question documentée au moins 0,38.
+  score_minimum: 0.03
+  # En dessous de ce meilleur score, l'interface signale des sources peu pertinentes.
+  score_alerte: 0.1
+  voisins: 1                     # passages voisins ajoutés de part et d'autre (contexte élargi)
+  tours_historique: 3            # échanges relus pour comprendre une question de suivi (0 = jamais)
+  # Documents similaires : regroupe les passages quasi identiques (versions
+  # successives, PDF et ODT d'une même note) et garde la version validée la
+  # plus récente.
+  dedoublonnage: true
+  seuil_doublons: 0.85           # similarité (0 à 1) à partir de laquelle deux passages sont des doublons
+  # Un passage entièrement repris dans un autre (même texte découpé
+  # différemment selon le format) compte aussi comme doublon, s'il est assez
+  # long pour ne pas être un simple bloc d'adresse (en groupes de 5 mots).
+  doublons_taille_min: 80
+  max_passages_par_document: 2   # évite qu'un seul document occupe toutes les places
+
+
+# -----------------------------------------------------------------------------
+# OCR : lecture des PDF scannés et des images
+# -----------------------------------------------------------------------------
+ocr:
+  active: true
+  moteur: openweight             # openweight (accès ouvert) ou mistral (accès restreint, repli automatique)
+  images_dans_pages: true        # lit aussi les images insérées dans des pages de texte
+  dpi: 200                       # résolution du rendu des pages
+  cote_max_pixels: 1540          # taille maximale de l'image envoyée
+  pages_max: 200                 # garde-fou par document
+  images_max: 100                # garde-fou par document
+  caracteres_min_page: 50        # en dessous, une page PDF est considérée comme scannée
+  caracteres_min_image: 15       # texte minimal pour retenir une image
+  part_image_min: 0.10           # une image doit couvrir au moins 10 % de la page (écarte les logos)
+  part_image_max: 0.85           # au-delà, page déjà scannée avec couche texte : ignorée
+  delai_max_secondes: 180
+
+
+# -----------------------------------------------------------------------------
+# Interface
+# -----------------------------------------------------------------------------
+interface:
+  titre: "Chat-de-Calais"
+  titre_onglet: "Chat-de-Calais"
+  avatar: assets/avatar.png
+  mode_par_defaut: administratif   # administratif, technique ou créatif
+  descriptions_modes:
+    administratif: "📋 Réponses formelles et réglementaires"
+    technique: "🔧 Réponses détaillées avec procédures"
+    créatif: "💡 Réponses pédagogiques et accessibles"
+  message_accueil: |
+    👋 **Bienvenue dans l'Assistant documentaire**
+
+    Posez vos questions sur les documents disponibles dans la base de connaissances.
+
+    💡 Changez le mode de réponse dans la barre latérale pour adapter le style.
+  # Messages affichés pendant le traitement d'une question
+  etapes:
+    reformulation: "Je relis la conversation pour bien comprendre la question..."
+    recherche: "Je cherche dans les documents..."
+    tri: "Je trie les passages trouvés par pertinence..."
+    redaction: "Je rédige la réponse à partir des sources..."
+    termine: "Sources trouvées"
+  # Couleur des pastilles de pertinence des sources
+  score_vert: 0.3                  # vert au-dessus
+  score_orange: 0.1                # orange au-dessus, rouge en dessous
+  journal_detaille: true           # messages détaillés dans la console
+
+
+# -----------------------------------------------------------------------------
+# Prompts (consignes données au modèle)
+# -----------------------------------------------------------------------------
+# Variables remplacées automatiquement (à conserver telles quelles) :
+#   {context}  les extraits de documents retenus (réponse)
+#   {query}    la question
+#   {history}  l'échange précédent (reformulation)
+# Pour écrire une accolade littérale, la doubler : {{ ou }}.
+prompts:
+  modes:
+    administratif:
+      systeme: |
+        Tu es un assistant IA spécialisé dans l'aide aux administrations publiques françaises.
+        Tu dois fournir des réponses précises, factuelles et conformes aux réglementations en vigueur.
+        Utilise un ton formel et professionnel. Cite systématiquement tes sources.
+      reponse: |
+        Contexte réglementaire et documentaire :
+        {context}
+
+        Question de l'agent public :
+        {query}
+
+        Instructions :
+        - Réponds de manière claire et structurée
+        - Cite tes sources par le numéro de l'extrait entre crochets, par exemple [1] ou [2][3]
+        - Chaque extrait indique sa date de réunion et s'il s'agit d'une version validée : privilégie la version validée la plus récente et signale les divergences entre versions
+        - Mentionne les articles ou références réglementaires pertinents
+        - Si l'information n'est pas dans le contexte, indique-le clairement
+        - Utilise un vocabulaire administratif précis
+
+        Réponse :
+      hyde: |
+        En tant qu'expert en administration publique française, rédige un document de référence détaillé qui répondrait à la question suivante :
+
+        Question : {query}
+
+        Document de référence (format administratif formel) :
+    technique:
+      systeme: |
+        Tu es un assistant technique spécialisé dans l'analyse de documents et procédures.
+        Tu dois fournir des réponses détaillées avec des explications techniques précises.
+        Structure tes réponses avec des listes, étapes et exemples concrets.
+      reponse: |
+        Documentation technique disponible :
+        {context}
+
+        Question technique :
+        {query}
+
+        Instructions :
+        - Fournis une réponse technique détaillée
+        - Décompose en étapes numérotées si nécessaire
+        - Ajoute des exemples ou cas d'usage
+        - Explique les concepts complexes simplement
+        - Cite tes sources par le numéro de l'extrait entre crochets, par exemple [1] ou [2][3]
+        - Chaque extrait indique sa date de réunion et s'il s'agit d'une version validée : privilégie la version validée la plus récente et signale les divergences entre versions
+
+        Réponse technique :
+      hyde: |
+        En tant qu'expert technique, crée une documentation détaillée avec procédures et exemples pour répondre à cette question :
+
+        Question : {query}
+
+        Documentation technique complète :
+    créatif:
+      systeme: |
+        Tu es un assistant créatif et pédagogique qui rend l'information accessible et engageante.
+        Tu utilises des analogies, des exemples concrets et un ton convivial tout en restant précis.
+      reponse: |
+        Informations disponibles :
+        {context}
+
+        Question :
+        {query}
+
+        Instructions :
+        - Explique de manière claire et accessible
+        - Utilise des analogies ou exemples parlants si pertinent
+        - Structure ta réponse de façon logique
+        - Reste factuel malgré le ton convivial
+        - Cite tes sources par le numéro de l'extrait entre crochets, par exemple [1] ou [2][3]
+        - Chaque extrait indique sa date de réunion et s'il s'agit d'une version validée : privilégie la version validée la plus récente et signale les divergences entre versions
+
+        Réponse :
+      hyde: |
+        Imagine une explication détaillée et pédagogique qui répondrait parfaitement à cette question :
+
+        Question : {query}
+
+        Explication complète et accessible :
+
+  # Reformulation des questions de suivi (« et pour Calais ? »)
+  reformulation: |
+    Voici un échange entre un agent public et un assistant documentaire, suivi d'une nouvelle question de l'agent.
+
+    Échange :
+    {history}
+
+    Nouvelle question : {query}
+
+    Si la nouvelle question prolonge l'échange (pronom, ellipse, « et pour... », « quel est le calendrier ? »), reformule-la pour qu'elle soit compréhensible seule, en y réintégrant les éléments implicites (commune, dispositif, document, période...).
+    Si elle porte sur un autre sujet ou se comprend déjà seule, recopie-la exactement, sans y ajouter d'éléments de l'échange.
+    Réponds uniquement par la question, sans guillemets ni commentaire.
+
+    Question autonome :
+
+  # Réponse affichée quand aucun passage n'est assez pertinent
+  aucune_reponse: |
+    Je n'ai trouvé aucun passage suffisamment pertinent dans la base documentaire pour répondre à cette question. Essayez de la reformuler, ou ajoutez le document concerné via les documents temporaires.
+
+  # Consigne donnée au modèle d'OCR (ignorée par certains modèles spécialisés)
+  ocr: |
+    Transcris intégralement le texte de cette page de document administratif, en Markdown, dans l'ordre de lecture. Conserve les titres, listes et tableaux. N'ajoute aucun commentaire ni résumé.

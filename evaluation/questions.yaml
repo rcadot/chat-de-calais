@@ -1,0 +1,138 @@
+# Jeu d'évaluation de la recherche documentaire.
+#
+# Pour chaque question : fragment(s) du nom des fichiers qui contiennent la
+# réponse (insensible à la casse). Toute version d'un document est acceptée
+# (brouillon, version validée, reprise d'une réunion à l'autre). Une question
+# est réussie si au moins une source attendue figure parmi les passages retenus.
+# Une question hors sujet (sources_attendues: []) est réussie si aucun passage
+# n'est retenu.
+#
+# Rédigé le 2026-10-09 à partir de la lecture des documents de documents/2024.
+# Types : chiffre précis, référence exacte, question de fond, contenu OCR
+# (tableaux, cartes, images), courriel, hors sujet.
+
+# --- Passages à niveau -------------------------------------------------------
+- question: "Combien de passages à niveau sont répertoriés par SNCF Réseau dans le Pas-de-Calais ?"
+  sources_attendues: ["note préfet pn"]
+- question: "Combien de conventions ont été établies pour la sécurisation des passages à niveau par aménagements simples ?"
+  sources_attendues: ["note préfet pn"]
+- question: "Quel décret précise les actions à réaliser sur les passages à niveau implantés sur des voies ferrées privées ?"
+  sources_attendues: ["note préfet pn", "chemin privé"]
+- question: "Quels passages à niveau sur chemin privé à Calais appartiennent à la société VENATOR ?"
+  sources_attendues: ["chemin privé"]
+- question: "Quelles mesures sont préconisées pour le passage à niveau n°99 à Brebières sur la D45 ?"
+  sources_attendues: ["tableau 2023"]
+- question: "Quels travaux sont préconisés au passage à niveau de la rue du Moulin à Gauchin-Verloingt ?"
+  sources_attendues: ["tableau 2021"]
+
+# --- Renouvellement urbain, logement, habitat --------------------------------
+- question: "Quel montant d'engagements l'Anru a-t-elle atteint dans le Pas-de-Calais en 2023 ?"
+  sources_attendues: ["anru bilan 2023"]
+- question: "Quels objectifs la directrice générale de l'ANRU a-t-elle fixés au département pour 2024 ?"
+  sources_attendues: ["npnru", "anru"]
+- question: "Quelle part de l'objectif d'engagement NPNRU était atteinte au 1er octobre 2024 ?"
+  sources_attendues: ["npnru perspectives"]
+- question: "Combien de logements de reconstitution de l'offre ont été engagés en 2024 au titre du NPNRU ?"
+  sources_attendues: ["anru_ro", "tableau_suivi_anru", "fin_gestion_npnru"]
+- question: "À combien de logements locatifs sociaux l'objectif de programmation 2024 a-t-il été ramené lors du CRHH du 15 octobre ?"
+  sources_attendues: ["atterrissage"]
+- question: "Combien de nouveaux agréments LLS étaient visés au CRHH plénier du 29 mars 2024 ?"
+  sources_attendues: ["programmation 2024 logements", "atterrissage"]
+- question: "Quel était le taux de consommation des autorisations d'engagement de l'Anah à la mi-décembre 2024 ?"
+  sources_attendues: ["fin gestion_anah"]
+- question: "Quels EPCI ont un projet de pacte territorial avec l'Anah et sur quels volets ?"
+  sources_attendues: ["parc privé anah"]
+- question: "Quel est l'autofinancement net HLM moyen de Pas-de-Calais Habitat sur trois ans ?"
+  sources_attendues: ["situation pdch"]
+- question: "Qui est le directeur général de Pas-de-Calais Habitat ?"
+  sources_attendues: ["synthétique pdch"]
+- question: "Combien de logements le parc social de PDC Habitat compte-t-il dans la communauté d'agglomération du Boulonnais ?"
+  sources_attendues: ["2023-088"]
+
+# --- Énergies renouvelables (ZAENR) ------------------------------------------
+- question: "Quel est le calendrier de la conférence territoriale prévue par la loi APER ?"
+  sources_attendues: ["orga_conf", "zaenr"]
+- question: "Avant quelle date le référent préfectoral doit-il transmettre la cartographie des zones d'accélération au CRÉ ?"
+  sources_attendues: ["zaenr", "za_enr"]
+- question: "Combien d'utilisateurs s'étaient identifiés sur le portail cartographique des zones d'accélération au 19 mars 2024 ?"
+  sources_attendues: ["avancement zaer"]
+- question: "Quelle loi encadre la définition des zones d'accélération des énergies renouvelables par les communes ?"
+  sources_attendues: ["zaenr", "za_enr", "zaer", "orga_conf"]
+
+# --- Mobilité, qualité de l'air ----------------------------------------------
+- question: "Quelles agglomérations doivent mettre en place une ZFE et quelle est la seule obligation des territoires de vigilance ?"
+  sources_attendues: ["zfe"]
+- question: "Que répond le préfet à la demande de dérogation à la ZFE de la communauté d'agglomération de Béthune-Bruay ?"
+  sources_attendues: ["zfe cabblr"]
+
+# --- Eau, agriculture, environnement -----------------------------------------
+- question: "Combien de systèmes d'assainissement ont été jugés pour l'année 2023 ?"
+  sources_attendues: ["assainissement"]
+- question: "Depuis quand le programme d'actions régional nitrates PAR7 est-il en vigueur ?"
+  sources_attendues: ["par7", "par v2"]
+- question: "Avant quelle date les couverts d'interculture doivent-ils être implantés selon le PAR7 ?"
+  sources_attendues: ["par7", "par v2"]
+- question: "Combien de mesures contient le Plan Eau et autour de combien d'axes sont-elles organisées ?"
+  sources_attendues: ["plan-eau", "trel2332413j"]
+- question: "Quelle est la référence NOR de l'instruction interministérielle du 1er juillet 2024 relative au Plan Eau ?"
+  sources_attendues: ["trel2332413j"]
+- question: "Quelles espèces de laridés étaient concernées par la dérogation sur le port de Boulogne-sur-Mer ?"
+  sources_attendues: ["laridés"]
+- question: "Quelle capacité d'accueil de nids est demandée pour compenser la destruction de nids de mouette tridactyle ?"
+  sources_attendues: ["laridés"]
+- question: "Combien d'exploitations agricoles compte le Pas-de-Calais ?"
+  sources_attendues: ["panorama agri"]
+- question: "Quel est l'objectif du contrôle unique dans les exploitations agricoles ?"
+  sources_attendues: ["contrôle unique", "controle unique", "cir_45580"]
+- question: "Où en est le plan d'économie de la chambre d'agriculture Nord-Pas-de-Calais ?"
+  sources_attendues: ["chambre agriculture"]
+- question: "De combien la loi industrie verte réduit-elle les délais d'autorisation environnementale ?"
+  sources_attendues: ["inductrie verte"]
+- question: "Combien de territoires du Pas-de-Calais sont concernés par l'obligation d'un PCAET ?"
+  sources_attendues: ["pcaet"]
+- question: "Quels enjeux sont fixés pour la COP territoriale de planification écologique ?"
+  sources_attendues: ["planification_ecologique"]
+
+# --- Littoral, mer, ports ----------------------------------------------------
+- question: "Pourquoi la mise en service de la nouvelle capitainerie de Calais est-elle bloquée ?"
+  sources_attendues: ["capitainerie"]
+- question: "Combien a coûté la construction de la nouvelle capitainerie de Calais ?"
+  sources_attendues: ["capitainerie"]
+- question: "Quelle longueur de littoral du Pas-de-Calais est soumise à l'érosion ?"
+  sources_attendues: ["trait de côte", "trait de cote"]
+- question: "Pourquoi l'organisateur de l'Enduropale 2025 demande-t-il davantage de pilotes ?"
+  sources_attendues: ["enduropale"]
+- question: "Depuis quand les baux de chasse sur le domaine public maritime sont-ils échus ?"
+  sources_attendues: ["chasse"]
+- question: "Quels coûts pèsent sur la formation des prix du poisson au port de Boulogne-sur-Mer ?"
+  sources_attendues: ["halieutique", "formation des prix"]
+- question: "Quand la révision du document stratégique de façade doit-elle être approuvée ?"
+  sources_attendues: ["dsf"]
+
+# --- Foncier, organisation, divers -------------------------------------------
+- question: "Quelle garantie la loi a-t-elle introduite pour les communes en matière de sobriété foncière ?"
+  sources_attendues: ["zan"]
+- question: "Quelle est la dotation 2024 en ETP de la DDTM sur le périmètre du MTECT ?"
+  sources_attendues: ["effectifs"]
+- question: "Combien de candidats se sont présentés au renouvellement des lieutenants de louveterie 2025-2029 ?"
+  sources_attendues: ["renouvellement ll"]
+- question: "Quand l'autorisation environnementale du canal Seine-Nord Europe pour les secteurs 2 à 6 a-t-elle été signée ?"
+  sources_attendues: ["csne"]
+- question: "Quelles difficultés la gendarmerie a-t-elle relevées lors d'une battue de régulation des lapins ?"
+  sources_attendues: ["lapins"]
+- question: "Quels sujets étaient à l'ordre du jour de la bilatérale DDTM-préfet du 18 novembre 2024 ?"
+  sources_attendues: ["odj"]
+
+# --- Hors sujet : la bonne réponse est « rien de pertinent » -----------------
+- question: "Quelle est la recette de la tarte au sucre ?"
+  sources_attendues: []
+- question: "Qui a gagné la coupe du monde de football 2018 ?"
+  sources_attendues: []
+- question: "Comment configurer une imprimante réseau sous Windows ?"
+  sources_attendues: []
+- question: "Quel est le cours de l'action TotalEnergies aujourd'hui ?"
+  sources_attendues: []
+- question: "Quelle est la capitale de l'Australie ?"
+  sources_attendues: []
+- question: "Quels sont les horaires d'ouverture de la piscine de Lens ?"
+  sources_attendues: []

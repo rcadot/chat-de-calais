@@ -4,7 +4,10 @@
 import sqlite3
 from datetime import datetime
 import json
+import logging
 from typing import List, Optional
+
+log = logging.getLogger(__name__)
 
 
 class RAGLogger:
@@ -170,7 +173,7 @@ class RAGLogger:
             conn.close()
             return True
         except Exception as e:
-            print(f"Erreur mise à jour feedback: {e}")
+            log.error("Erreur mise à jour feedback: %s", e)
             return False
 
     def get_recent_queries(self, limit: int = 10) -> List[dict]:

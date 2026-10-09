@@ -30,281 +30,173 @@ format:
     slide-level: 2
 ---
 
-# Vue d'ensemble synthétique
+# Contexte
 
-## Qu'est-ce que Chat de Calais ?
+## Un assistant pour les notes de la DDTM
 
-- **Système RAG** (Retrieval-Augmented Generation) pour interroger des bases documentaires
-- Utilisation des modèles **ALBERT** (API Etalab) pour :
-  - Embeddings
-  - Génération de texte
-  - Reranking
-- Interface utilisateur **Streamlit**
+- Les notes de la DDTM du Pas-de-Calais s'accumulent en versions successives, en plusieurs formats
+- **Chat de Calais** : un assistant RAG (Streamlit) qui répond à partir de ces documents
+- Modèles **Albert** (API Etalab) : réponse, embeddings, rerank et OCR
+- Chaque réponse cite ses sources
 
-## Architecture globale
+## Le corpus
 
-```{mermaid}
-graph TD
-    A[Utilisateur] --> B[Interface Streamlit]
-    B --> C[Pipeline RAG]
-    C --> D[Base ChromaDB]
-    D --> E[Documents indexés]
-    C --> F[API ALBERT]
-    F --> G[Modèles IA]
-```
+| | |
+|---|---|
+| Fichiers | 130 |
+| Passages indexés | 855 |
+| Passages issus de l'OCR | 199 |
+| Réindexation complète | environ 20 secondes (cache OCR) |
 
-## Fonctionnalités clés
+# Chaîne de traitement
 
-- Indexation incrémentale des documents
-- Pipeline RAG avec HyDE et reranking
-- 3 modes de réponse (Administratif, Technique, Créatif)
-- Traçabilité complète des requêtes
-- Feedback utilisateur intégré
-
-# Architecture détaillée
-
-## Pipeline RAG en 4 étapes
+## De la question à la réponse
 
 ```{mermaid}
-graph LR
-    A[Question] --> B[HyDE]
-    B --> C[Retrieval 30 docs]
-    C --> D[Reranking Top 5]
-    D --> E[Génération LLM]
-    E --> F[Réponse]
+%%| fig-width: 10
+flowchart LR
+    A[Question] --> B[Reformulation]
+    B --> C[HyDE, optionnel]
+    C --> D[Recherche hybride]
+    D --> E[Dédoublonnage]
+    E --> F[Rerank]
+    F --> G[Seuil et plafond]
+    G --> H[Voisins]
+    H --> I[Réponse citée]
 ```
 
-## Module d'indexation
+## Formats et OCR
 
-- **Formats supportés** : PDF, DOCX, ODT, TXT, MD, HTML
-- **Processus** :
-  1. Scan du dossier `./documents`
-  2. Calcul des hash MD5
-  3. Détection des changements
-  4. Mise à jour incrémentale ChromaDB
-  5. Sauvegarde métadonnées
+- PDF, DOCX, **DOC** (lecteur Python pur), ODT, TXT, MD, HTML, **EML** avec pièces jointes
+- Images PNG, JPG, TIFF lues par OCR
+- Page PDF scannée si moins de 50 caractères de texte
+- Images insérées dans une page de texte également lues
+- Résultats mis en cache sur disque
 
-## Technologies utilisées
+## Documents similaires
 
-| Composant | Technologie | Rôle |
-|-----------|-------------|------|
-| Framework RAG | LangChain | Chaining de modèles |
-| Base vectorielle | ChromaDB | Stockage des embeddings |
-| Interface | Streamlit | UI interactive |
-| Logging | SQLite | Traçabilité |
-| Modèles IA | ALBERT API | Embeddings, LLM, Reranking |
-| Visualisation | Plotly | Graphiques interactifs |
+- Une même note existe en plusieurs versions et formats
+- Métadonnées tirées du chemin : date de réunion, version validée, titre, famille
+- Passages quasi identiques regroupés
+- Représentant retenu : version validée, puis la plus récente
+- Les autres restent visibles sous la mention « aussi dans »
 
-# Implémentation technique
+# Recherche et pertinence
 
-## Configuration principale
-
-```python
-# config.py
-ALBERT_API_KEY = os.getenv("ALBERT_API_KEY", "")
-ALBERT_BASE_URL = "https://albert.api.etalab.gouv.fr/v1"
-
-EMBEDDINGS_MODEL = "embeddings-small"
-LLM_MODEL = "albert-large"
-RERANK_MODEL = "rerank-small"
-
-CHUNK_SIZE = 2000
-CHUNK_OVERLAP = 400
-RAG_TOP_K_DOCS = 5
-RAG_TOP_N_RETRIEVAL = 30
-```
-
-## Exemple de code - Pipeline RAG
-
-```python
-# rag_pipeline.py
-def rag_query(query: str, retriever, llm, mode: str = None):
-    # 1. HyDE - Génération document hypothétique
-    hyde_query = generate_hyde(query, llm)
-    
-    # 2. Retrieval - 30 documents
-    docs_initial = retriever.invoke(hyde_query)
-    
-    # 3. Reranking - Top 5
-    docs_final = rerank_documents(query, docs_initial, top_k=5)
-    
-    # 4. Génération réponse
-    context = "\n\n".join([d.page_content for d in docs_final])
-    answer = llm.generate(context + query)
-    
-    return {"answer": answer, "sources": sources}
-```
-
-## Applications Streamlit
-
-- Le chatbot
-- Dashboard de logs
-
-
-
-## Application de chat
+## Recherche hybride
 
 ::: {.columns}
 ::: {.column width="50%"}
+**Par le sens**
 
-
-- Chat interactif avec historique
-- Sélection du mode de prompt
-- Upload de documents temporaires
-- Feedback utilisateur (👍/👎)
-- Affichage des sources
-
+Recherche vectorielle sur la question (ou sur une réponse hypothétique si HyDE est activé)
 :::
-
 ::: {.column width="50%"}
+**Par les mots**
 
-![*Landing page du chatbot*](chat_1.png)
-
+BM25 sur la question d'origine, pour les références exactes
 :::
 :::
 
+Les deux classements sont fusionnés (Reciprocal Rank Fusion, k = 60).
 
-## Application de chat
+## Rerank et seuil de pertinence
 
-Un exemple de réponse
+- Les candidats sont triés par le modèle de rerank Albert
+- Seuil de 0,03 : sans passage au-dessus, **aucun appel au modèle** et un message explicite
+- Au plus 2 passages par document, 5 passages au total
+- Passages élargis à leurs voisins
 
-![*Chatbot en action*](chat_2.png)
+## HyDE : facultatif
 
+- Désactivé par défaut, disponible en option
+- Aucun gain mesuré dès lors que la recherche hybride est active
+- Environ 15 s d'attente en plus par question, contre 0,4 s sans
 
-## Dashboard de logs
+## Questions de suivi
+
+- Les 3 derniers échanges servent à reformuler la question
+- « Et pour Calais ? » devient une question autonome
+- Une question qui change de sujet est laissée telle quelle
+
+# Interface
+
+## Une interface qui explique son travail
+
+- Statut animé : étapes, détails, chronomètre en direct
+- « Sources trouvées en x s », puis « Réponse en y s »
+- Trois modes de réponse : administratif, technique, créatif
+- Documents temporaires interrogés avec la base ou seuls
+- Retours pouce haut et pouce bas
+
+## Sources citées
+
+- Onglets numérotés comme les citations [n]
+- Extrait utilisé, date, statut, pertinence, mention OCR
+- Aperçu de la page PDF et ouverture du document
+- Avertissement si les sources sont peu pertinentes
+- Filtres : période de réunion, versions validées
+
+## Captures de l'ancienne interface
+
+::: {.callout-warning}
+Ces captures montrent la version précédente de l'interface.
+:::
 
 ::: {.columns}
 ::: {.column width="50%"}
-
-- Métriques principales
-- Visualisations interactives
-- Filtres par période, status, mode
-- Analyse des feedbacks utilisateurs
-
-
+![*Chat (ancienne version)*](chat_1.png)
 :::
-
 ::: {.column width="50%"}
-
-![*Dashboard de logs*](logs_1.png)
-
+![*Tableau de bord des requêtes (ancienne version)*](logs_1.png)
 :::
 :::
 
-## Base de données de logs {.scrollable}
+# Exploitation et qualité
 
-::: {.columns}
-::: {.column width="50%"}
-### Schéma SQLite
+## Paramétrage sans code
 
-- `rag_queries` table avec 15+ champs
-- Traçabilité complète : requêtes, réponses, scores, temps, feedbacks
-- Statistiques et analyses intégrées
+- Un fichier `parametres.yaml` commenté : modèles, recherche, OCR, textes, prompts
+- Clé d'API et surcharges dans `.env`
+- Validation au démarrage : type, clé manquante, variables de prompt, numéro de ligne en cas d'erreur
+- Certains réglages imposent une réindexation
 
-:::
+## Évaluation : la méthode
 
-::: {.column width="50%"}
+- 55 questions : 49 avec réponse dans un document connu, 6 hors sujet
+- Indicateurs : succès, rappel, MRR, rejet des hors sujet, documents distincts, doublons, durée
+- `evaluate.py` désactive une étape à la fois (HyDE, hybride, rerank, dédoublonnage)
+- `--seuils` simule plusieurs seuils sans nouvel appel
+- Rapport complet : `evaluation/rapport_evaluation.md`
 
-::: {.small}
-| Champ | Description |
-|-------|-------------|
-| `id` | Identifiant unique |
-| `timestamp` | Date et heure |
-| `user_query` | Question utilisateur |
-| `hyde_query` | Requête HyDE |
-| `retrieved_docs_count` | Docs récupérés |
-| `reranked_docs_count` | Docs rerankés |
-| `final_answer` | Réponse finale |
-| `sources` | Sources |
-| `rerank_scores` | Scores reranking |
-| `execution_time_seconds` | Temps exécution |
-| `error` | Erreurs |
-| `retrieved_docs_details` | Détails docs récupérés |
-| `reranked_docs_details` | Détails docs rerankés |
-| `prompt_mode` | Mode prompt |
-| `user_feedback` | Feedback |
-| `feedback_timestamp` | Date feedback |
-:::
-:::
-:::
+## Évaluation : résultats
 
+- Référence : 49 questions documentées sur 49 trouvées, 6 hors sujet sur 6 rejetées, MRR de 0,97, 0,4 s par recherche
+- Sans recherche hybride : 18 % de succès
+- Sans rerank : aucun hors sujet rejeté, MRR de 0,48
+- Sans dédoublonnage : 1,05 doublon par réponse (0 avec)
+- Avec HyDE : MRR de 0,98 mais 15 s, d'où sa désactivation
+- Une trentaine de chiffres des réponses contrôlés, tous exacts
+- Limite : questions rédigées avec le vocabulaire des documents
 
-## Une documentation à plusieurs niveaux 
+## Qualité et tests
 
-### Un document dédié
-
-![Un fichier html dédié à la documentation technique](Documentation%20Technique%20-%20Chat%20de%20Calais.png)
-
-
-## Une documentation à plusieurs niveaux 
-
-### Des fonctions commentées
-
-```python
-
-def rag_query(
-    query: str, retriever, llm, logger=None, top_k: int = None, mode: str = None
-):
-    """
-    Exécute une requête RAG complète avec le mode de prompt configuré.
-
-    Args:
-        query: Question de l'utilisateur
-        retriever: Retriever ChromaDB
-        llm: Modèle LLM
-        logger: Logger optionnel
-        top_k: Nombre de documents finaux
-        mode: Mode de prompt à utiliser (override config.PROMPT_MODE)
-
-    Returns:
-        dict: Résultat avec answer, sources, scores, etc.
-    """
-    start_time = time.time()
-    top_k = top_k or config.RAG_TOP_K_DOCS
-
-    # Déterminer le mode à utiliser
-    prompt_mode = mode or config.PROMPT_MODE
-
-    # ✅ Initialiser les variables au début pour éviter UnboundLocalError
-    hyde_query = query
-    docs_initial = []
-    docs_final = []
-
-    try:
-        if config.VERBOSE:
-            print(f"\n{'=' * 60}")
-            print(f"Nouvelle requête (mode: {prompt_mode})")
-            print(f"{'=' * 60}")
-            print(f"Question: {query}\n")
-
-        # 1. HyDE
-        if config.VERBOSE:
-            print("1/4: Génération HyDE...")
-        hyde_query = generate_hyde(query, llm)
-        ...
-
-```
-
+- Environ 100 tests `pytest`, API Albert simulée
+- Couverture : paramètres, corpus, OCR, chargeurs, recherche, pipeline, évaluation
+- Intégration continue GitHub Actions et GitLab CI
+- Journal SQLite des requêtes et tableau de bord
 
 # Conclusion
 
-## Points forts du système
+## Suites possibles
 
-- **Modularité** : Modules indépendants et réutilisables
-- **Extensibilité** : Ajout facile de nouveaux formats et fonctionnalités
-- **Traçabilité** : Logging complet pour analyse et amélioration
-- **Flexibilité** : 3 modes de réponse adaptés à différents usages
-- **Performance** : Pipeline optimisé avec HyDE et reranking
-
-## Perspectives d'évolution
-
-- Intégration/modifications des modèles
-- Amélioration de l'interface utilisateur
-- Amélioration des paramètres (préprompts, filtres, seuils, etc.)
-- Optimisation des performances
+- Exploiter le rapport d'évaluation pour ajuster les seuils et le plafond
+- Étendre le corpus et le jeu de questions
+- Tester d'autres modèles Albert
+- Exploiter les retours des utilisateurs du journal
 
 ## Questions ?
 
-Merci pour votre attention !
+Merci pour votre attention.
 
 *Contact : romain.cadot@cerema.fr*

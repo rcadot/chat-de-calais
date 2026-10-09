@@ -34,3 +34,14 @@ tests/__pycache__/test_rag_pipeline.cpython-313-pytest-9.0.1.pyc
 coverage.xml
 rag_logs.db
 .coverage
+.venv/
+_tmp/
+__pycache__/
+evaluation/resultats/
+
+# Données locales (documents réels, base vectorielle, cache OCR)
+documents/*
+!documents/.gitkeep
+chroma_db_rag/*
+!chroma_db_rag/.gitkeep
+chroma_db_rag_ancienne/

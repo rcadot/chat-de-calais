@@ -1,144 +1,169 @@
-# tests/conftest.py (AJOUT)
-"""Fixtures partagées pour tous les tests."""
-import pytest
-import tempfile
+# tests/test_loaders.py
+"""Tests des chargeurs de documents (hors OCR, testé dans test_ocr.py)."""
+
 import os
-import shutil
+from email.message import EmailMessage
 from pathlib import Path
-from unittest.mock import Mock, MagicMock
-from datetime import datetime
 
-@pytest.fixture
-def temp_dir():
-    """Crée un répertoire temporaire."""
-    temp = tempfile.mkdtemp()
-    yield temp
-    shutil.rmtree(temp)
+import pytest
 
-@pytest.fixture
-def temp_documents_dir(temp_dir):
-    """Crée un répertoire de documents temporaire avec des fichiers de test."""
-    docs_dir = os.path.join(temp_dir, "documents")
-    os.makedirs(docs_dir)
-    
-    # ✅ TXT
-    with open(os.path.join(docs_dir, "test.txt"), "w", encoding="utf-8") as f:
-        f.write("Ceci est un document de test sur le ZAN.\nDeuxième ligne.")
-    
-    # ✅ MD
-    with open(os.path.join(docs_dir, "test.md"), "w", encoding="utf-8") as f:
-        f.write("# Titre\n\nContenu markdown sur Mad et Moselle.")
-    
-    # ✅ DOCX (si python-docx disponible)
-    try:
-        from docx import Document as DocxDocument
-        doc = DocxDocument()
-        doc.add_heading('Document Test', 0)
-        doc.add_paragraph('Contenu DOCX de test sur le ZAN.')
-        doc.save(os.path.join(docs_dir, "test.docx"))
-    except ImportError:
-        pass
-    
-    # ✅ PDF (si reportlab disponible)
-    try:
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import letter
-        pdf_path = os.path.join(docs_dir, "test.pdf")
-        c = canvas.Canvas(pdf_path, pagesize=letter)
-        c.drawString(100, 750, "Document PDF test")
-        c.drawString(100, 730, "Contenu sur le ZAN")
-        c.save()
-    except ImportError:
-        pass
-    
-    # ✅ ODT (si odfpy disponible)
-    try:
-        from odf.opendocument import OpenDocumentText
-        from odf.text import P
-        textdoc = OpenDocumentText()
-        p = P(text="Document ODT de test.")
-        textdoc.text.addElement(p)
-        p2 = P(text="Contenu sur le ZAN.")
-        textdoc.text.addElement(p2)
-        textdoc.save(os.path.join(docs_dir, "test.odt"))
-    except ImportError:
-        pass
-    
-    # ✅ HTML
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head><title>Test</title></head>
-    <body>
-        <h1>Test HTML</h1>
-        <p>Contenu sur le ZAN.</p>
-    </body>
-    </html>
-    """
-    with open(os.path.join(docs_dir, "test.html"), "w", encoding="utf-8") as f:
-        f.write(html_content)
-    
-    return docs_dir
+import loaders
+from indexer import split_documents
 
-@pytest.fixture
-def mock_embeddings():
-    """Mock des embeddings Albert."""
-    mock = MagicMock()
-    mock.embed_documents.return_value = [[0.1, 0.2, 0.3]] * 5
-    mock.embed_query.return_value = [0.1, 0.2, 0.3]
-    return mock
+FIXTURES = Path(__file__).parent / "fixtures"
 
-@pytest.fixture
-def mock_llm():
-    """Mock du LLM Albert."""
-    mock = MagicMock()
-    mock_response = MagicMock()
-    mock_response.content = "Ceci est une réponse générée par le LLM."
-    mock.invoke.return_value = mock_response
-    
-    # Pour streaming
-    mock_chunks = [
-        MagicMock(content="Ceci "),
-        MagicMock(content="est "),
-        MagicMock(content="une "),
-        MagicMock(content="réponse.")
-    ]
-    mock.stream.return_value = iter(mock_chunks)
-    
-    return mock
 
-@pytest.fixture
-def sample_documents():
-    """Documents LangChain de test."""
+def test_txt_latin1(temp_dir):
+    """Un texte en latin-1 est lu malgré l'échec de l'UTF-8."""
+    path = os.path.join(temp_dir, "ancien.txt")
+    Path(path).write_bytes("Arrêté préfectoral".encode("latin-1"))
+    docs = loaders.load_document(path)
+    assert docs[0].page_content == "Arrêté préfectoral"
+
+
+def test_markdown_read_as_text(temp_dir):
+    """Le Markdown est lu tel quel, titres compris."""
+    path = os.path.join(temp_dir, "note.md")
+    Path(path).write_text("# Titre\n\nContenu sur le ZAN.", encoding="utf-8")
+    docs = loaders.load_document(path)
+    assert "# Titre" in docs[0].page_content
+    assert "ZAN" in docs[0].page_content
+
+
+def test_docx(temp_dir):
+    """Un .docx est lu."""
+    docx = pytest.importorskip("docx")
+    path = os.path.join(temp_dir, "note.docx")
+    document = docx.Document()
+    document.add_paragraph("Contenu DOCX sur le ZAN.")
+    document.save(path)
+    assert "ZAN" in loaders.load_document(path)[0].page_content
+
+
+def test_odt_headings_kept_footer_ignored(temp_dir):
+    """ODT : titres conservés dans l'ordre, pied de page (adresse) écarté."""
+    from odf.opendocument import OpenDocumentText
+    from odf.style import Footer, MasterPage, PageLayout
+    from odf.text import H, P
+
+    document = OpenDocumentText()
+    layout = PageLayout(name="Mise")
+    document.automaticstyles.addElement(layout)
+    master = MasterPage(name="Standard", pagelayoutname=layout)
+    footer = Footer()
+    footer.addElement(P(text="100 Avenue Winston Churchill"))
+    master.addElement(footer)
+    document.masterstyles.addElement(master)
+    document.text.addElement(H(outlinelevel=1, text="1. Contexte"))
+    document.text.addElement(P(text="La loi fixe une trajectoire."))
+    path = os.path.join(temp_dir, "note.odt")
+    document.save(path)
+
+    content = loaders.load_document(path)[0].page_content
+    assert content == "1. Contexte\nLa loi fixe une trajectoire."
+
+
+def test_html(temp_dir):
+    """Une page HTML est lue."""
+    pytest.importorskip("unstructured")
+    path = os.path.join(temp_dir, "page.html")
+    Path(path).write_text("<html><body><p>Contenu sur le ZAN.</p></body></html>", encoding="utf-8")
+    assert "ZAN" in loaders.load_document(path)[0].page_content
+
+
+def test_doc_word97():
+    """Un .doc Word 97-2003 est lu sans LibreOffice : accents, champ, tableau."""
+    content = loaders.load_document(str(FIXTURES / "exemple.doc"))[0].page_content
+    assert content.startswith("Note relative à la sobriété foncière")
+    assert "réduite de 50 %" in content
+    assert "DATE" not in content  # code du champ supprimé, résultat conservé
+    assert "Commune\tHectares\nCalais\t211" in content
+
+
+def test_doc_not_ole_returns_empty(temp_dir):
+    """Un faux .doc (texte renommé) est ignoré sans erreur."""
+    path = os.path.join(temp_dir, "faux.doc")
+    Path(path).write_text("pas un document Word", encoding="utf-8")
+    assert loaders.load_document(path) == []
+
+
+def test_eml_body_and_attachments(temp_dir):
+    """Courriel : en-têtes et corps, pièce jointe chargée, image intégrée ignorée."""
+    message = EmailMessage()
+    message["Subject"] = "Intervention suite aux régulations"
+    message["From"] = "agent@example.fr"
+    message["Date"] = "Mon, 18 Nov 2024 10:00:00 +0100"
+    message.set_content("Bonjour,\nveuillez trouver la note en pièce jointe.")
+    message.add_alternative("<p>Bonjour, <b>version HTML</b></p>", subtype="html")
+    message.get_payload()[1].add_related(b"\x89PNG...", maintype="image", subtype="png", cid="sig")
+    message.add_attachment(
+        "Note : la population de lapins a doublé.".encode("utf-8"),
+        maintype="text",
+        subtype="plain",
+        filename="note.txt",
+    )
+    path = os.path.join(temp_dir, "courriel.eml")
+    Path(path).write_bytes(bytes(message))
+
+    docs = loaders.load_document(path)
+
+    assert len(docs) == 2
+    assert docs[0].page_content.startswith("Objet : Intervention suite aux régulations")
+    assert "veuillez trouver la note" in docs[0].page_content  # texte brut préféré
+    assert docs[1].metadata == {"source": path, "attachment": "note.txt"}
+    assert "lapins" in docs[1].page_content
+
+
+def test_unsupported_extension(temp_dir):
+    """Une extension inconnue ne produit aucun document."""
+    path = os.path.join(temp_dir, "data.xyz")
+    Path(path).write_text("contenu", encoding="utf-8")
+    assert loaders.load_document(path) == []
+
+
+def test_split_documents_numbers_chunks():
+    """Les chunks d'un fichier sont numérotés dans l'ordre de lecture."""
     from langchain_core.documents import Document
-    return [
-        Document(page_content="Contenu 1 sur le ZAN", metadata={"source": "doc1.pdf"}),
-        Document(page_content="Contenu 2 sur Mad et Moselle", metadata={"source": "doc2.odt"}),
-        Document(page_content="Contenu 3 général", metadata={"source": "doc3.txt"}),
-    ]
 
-@pytest.fixture
-def mock_retriever(sample_documents):
-    """Mock du retriever."""
-    mock = MagicMock()
-    mock.invoke.return_value = sample_documents
-    return mock
+    pages = [Document(page_content="mot " * 800, metadata={"source": "a.pdf", "page": p}) for p in range(2)]
+    chunks = split_documents(pages)
+    assert [c.metadata["chunk_index"] for c in chunks] == list(range(len(chunks)))
+    assert len(chunks) > 2
 
-@pytest.fixture
-def temp_db_path(temp_dir):
-    """Chemin vers une base ChromaDB temporaire."""
-    return os.path.join(temp_dir, "test_chroma_db")
 
-@pytest.fixture
-def temp_logs_db(temp_dir):
-    """Chemin vers une base de logs temporaire."""
-    return os.path.join(temp_dir, "test_logs.db")
+def test_odt_ignores_comments_and_deleted_text(temp_dir):
+    """ODT : commentaires de relecture et texte supprimé (suivi des modifications) exclus."""
+    from odf import office, text as odf_text
+    from odf.opendocument import OpenDocumentText
 
-@pytest.fixture(autouse=True)
-def setup_test_env(monkeypatch, temp_dir):
-    """Configure l'environnement pour les tests."""
-    monkeypatch.setenv("ALBERT_API_KEY", "test_key_12345")
-    
-    # Importer config après avoir set les env vars
+    document = OpenDocumentText()
+    tracked = odf_text.TrackedChanges()
+    from odf.namespaces import XMLNS
+
+    region = odf_text.ChangedRegion(check_grammar=False)
+    region.setAttrNS(XMLNS, "id", "c1")  # attribut xml:id obligatoire
+    deletion = odf_text.Deletion()
+    deletion.addElement(office.ChangeInfo())
+    deletion.addElement(odf_text.P(text="Ancienne phrase supprimée."))
+    region.addElement(deletion)
+    tracked.addElement(region)
+    document.text.addElement(tracked)
+    paragraph = odf_text.P(text="Texte final de la note.")
+    annotation = office.Annotation()
+    annotation.addElement(odf_text.P(text="Relecteur : inverser les deux points ?"))
+    paragraph.addElement(annotation)
+    document.text.addElement(paragraph)
+    path = os.path.join(temp_dir, "relue.odt")
+    document.save(path)
+
+    assert loaders.load_document(path)[0].page_content == "Texte final de la note."
+
+
+def test_ocr_cleanup_loops_and_prompt_echo():
+    """OCR : boucles de répétition réduites, consigne recopiée retirée."""
     import config
-    monkeypatch.setattr(config, "VERBOSE", False)  # Désactiver logs pendant tests
+
+    looped = "Légende\n" + "- CCA\n" * 300 + "Total 40 059 logts"
+    assert loaders.normalize_ocr_text(looped) == "Légende\n- CCA\n- CCA\nTotal 40 059 logts"
+    echoed = config.OCR_PROMPT + "\n| NOM | ADRESSE |"
+    assert loaders.normalize_ocr_text(echoed) == "| NOM | ADRESSE |"

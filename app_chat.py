@@ -12,18 +12,27 @@ from rag_pipeline import rag_query, rag_query_stream
 from logger import RAGLogger
 from temp_documents import render_temp_documents_section
 from st_copy import copy_button
-from utils_app import format_sources
+from utils_app import format_sources, render_passages
+from corpus import format_meeting_date
+from retrieval import available_meeting_dates
+
+config.setup_logging()
+
+# Avatar de l'assistant (parametres.yaml : interface.avatar), emoji à défaut
+AVATAR = config.AVATAR_PATH if Path(config.AVATAR_PATH).is_file() else "🐈"
 
 # ✅ MODE DEV : Changer à False pour utiliser l'IA réelle
 DEV_MODE = False
 
 # Configuration de la page
 st.set_page_config(
-    page_title="Chat-de-Calais",
-    page_icon="🐈",
+    page_title=config.APP_PAGE_TITLE,
+    page_icon=AVATAR,
     layout="wide",
     initial_sidebar_state="expanded",
 )
+if AVATAR != "🐈":
+    st.logo(AVATAR, size="large")
 
 # CSS personnalisé
 st.markdown(
@@ -127,20 +136,52 @@ with st.sidebar:
 
     # Mode de prompt
     st.subheader("🎭 Mode de réponse")
+    modes = config.list_prompt_modes()
     prompt_mode = st.selectbox(
         "Sélectionnez le style",
-        ["administratif", "technique", "créatif"],
-        index=0,
+        modes,
+        index=modes.index(config.PROMPT_MODE) if config.PROMPT_MODE in modes else 0,
         help="Change le style et le ton des réponses",
     )
 
-    # Description du mode
-    mode_descriptions = {
-        "administratif": "📋 Réponses formelles et réglementaires",
-        "technique": "🔧 Réponses détaillées avec procédures",
-        "créatif": "💡 Réponses pédagogiques et accessibles",
-    }
-    st.info(mode_descriptions[prompt_mode])
+    # Description du mode (parametres.yaml : interface.descriptions_modes)
+    if config.MODE_DESCRIPTIONS.get(prompt_mode):
+        st.info(config.MODE_DESCRIPTIONS[prompt_mode])
+
+    st.divider()
+
+    # Filtres de recherche (documents similaires : période, versions validées)
+    st.subheader("🔎 Filtres")
+    if "meeting_dates" not in st.session_state:
+        try:
+            st.session_state.meeting_dates = available_meeting_dates(st.session_state.retriever)
+        except Exception:
+            st.session_state.meeting_dates = []
+    meeting_dates = st.session_state.meeting_dates
+    search_filters = {}
+    # Filtre de période désactivé par défaut : un document récemment indexé
+    # ou sans date de réunion serait sinon écarté sans que l'utilisateur le sache.
+    if len(meeting_dates) >= 2 and st.toggle(
+        "Filtrer par période",
+        value=False,
+        help="Désactivé : tous les documents sont interrogés, quelle que soit leur date",
+    ):
+        date_min, date_max = st.select_slider(
+            "Période des réunions",
+            options=meeting_dates,
+            value=(meeting_dates[0], meeting_dates[-1]),
+            format_func=format_meeting_date,
+            help="Ne chercher que dans les documents des réunions de cette période",
+        )
+        if (date_min, date_max) != (meeting_dates[0], meeting_dates[-1]):
+            search_filters.update(date_min=date_min, date_max=date_max)
+    if st.checkbox(
+        "Versions validées uniquement",
+        help="Ignorer les brouillons : ne garder que les versions validées, finales ou définitives",
+    ):
+        search_filters["validated_only"] = True
+    if search_filters:
+        st.caption("Filtres actifs : les documents temporaires restent toujours interrogés.")
 
     st.divider()
 
@@ -154,7 +195,7 @@ with st.sidebar:
         st.rerun()
 
 # En-tête principal
-st.title("🐈 Chat 62")
+st.title(config.APP_TITLE)
 st.caption(f"Posez vos questions sur les documents - Mode: **{prompt_mode}**")
 
 if len(st.session_state.messages) == 0:
@@ -163,7 +204,7 @@ if len(st.session_state.messages) == 0:
 
 # Afficher l'historique des messages
 for idx, message in enumerate(st.session_state.messages):
-    avatar = "avatar.jpg" if message["role"] == "assistant" else None
+    avatar = AVATAR if message["role"] == "assistant" else None
 
     with st.chat_message(message["role"], avatar=avatar):
         # Afficher le contenu
@@ -212,8 +253,14 @@ for idx, message in enumerate(st.session_state.messages):
                     ),
                 )
 
-            # Sources collapsées (SOUS les boutons)
-            if "sources" in message and message["sources"]:
+            # Sources (SOUS les boutons)
+            if "passages" in message:
+                render_passages(
+                    message["passages"],
+                    key_prefix=f"msg_{idx}",
+                    no_relevant_docs=message.get("no_relevant_docs", False),
+                )
+            elif "sources" in message and message["sources"]:
                 with st.expander("📚 Voir les sources consultées", expanded=False):
                     sources_html = format_sources(
                         message["sources"], message.get("scores", [])
@@ -229,11 +276,10 @@ if prompt := st.chat_input("Posez votre question..."):
         st.markdown(prompt)
 
     # Générer la réponse
-    with st.chat_message("assistant", avatar="avatar.jpg"):
+    with st.chat_message("assistant", avatar=AVATAR):
+        # Statut animé (étapes et détails), puis la réponse en dessous
+        status_box = st.status(config.STATUS_MESSAGES["recherche"], expanded=True)
         message_placeholder = st.empty()
-
-        # Emojis par mode
-        mode_emojis = {"administratif": "📋", "technique": "🔧", "créatif": "💡"}
 
         try:
             # ✅ MODE DEV : Réponse simulée
@@ -254,27 +300,39 @@ if prompt := st.chat_input("Posez votre question..."):
                     "hyde_query": None,
                     "retrieved_docs": None,
                     "reranked_docs": None,
-                    "executiontime": 0,
+                    "execution_time": 0,
                     "error": None,
                 }
                 query_id = None  # Pas de logging en mode DEV
 
             # ✅ MODE NORMAL : RAG complet
             else:
-                with st.spinner(
-                    f"{mode_emojis[prompt_mode]} Génération de la réponse..."
-                ):
-                    full_response = ""
-                    metadata = None
-
+                full_response = ""
+                metadata = None
+                with status_box, st.spinner("Temps écoulé", show_time=True):
                     for item in rag_query_stream(
                         prompt,
                         st.session_state.retriever,
                         st.session_state.llm,
                         logger=None,  # Ne pas logger dans le pipeline
                         mode=prompt_mode,
+                        # Historique sans la question en cours (questions de suivi)
+                        history=st.session_state.messages[:-1],
+                        filters=search_filters or None,
                     ):
-                        if item["type"] == "chunk":
+                        if item["type"] == "status":
+                            if item.get("detail"):
+                                st.markdown(f"✓ {item['detail']}  \n:gray[{item['elapsed']:.1f} s]")
+                            if item.get("step") == "redaction":
+                                status_box.update(
+                                    label=f"{config.STATUS_MESSAGES['termine']} en {item['elapsed']:.1f} s",
+                                    state="complete",
+                                    expanded=False,
+                                )
+                                message_placeholder.markdown(f"_{item['content']}_")
+                            else:
+                                status_box.update(label=item["content"])
+                        elif item["type"] == "chunk":
                             full_response += item["content"]
                             message_placeholder.markdown(full_response + "▌")
                         elif item["type"] == "metadata":
@@ -289,12 +347,20 @@ if prompt := st.chat_input("Posez votre question..."):
                                 "hyde_query": None,
                                 "retrieved_docs": None,
                                 "reranked_docs": None,
-                                "executiontime": 0,
+                                "execution_time": 0,
                             }
 
-                # Retirer le curseur
+                # Retirer le curseur ; statut final si la rédaction n'a pas eu lieu
                 if full_response:
                     message_placeholder.markdown(full_response)
+                if metadata and metadata.get("error"):
+                    status_box.update(label="Erreur pendant le traitement", state="error")
+                elif metadata and metadata.get("no_relevant_docs"):
+                    status_box.update(
+                        label="Aucune source suffisamment pertinente", state="complete", expanded=False
+                    )
+                if metadata and metadata.get("execution_time"):
+                    st.caption(f"Réponse en {metadata['execution_time']:.1f} s")
 
                 # ✅ Logger UNE SEULE FOIS avec TOUTES les infos du pipeline
                 if metadata:
@@ -306,7 +372,7 @@ if prompt := st.chat_input("Posez votre question..."):
                         final_answer=full_response,
                         sources=metadata.get("sources", []),
                         rerank_scores=metadata.get("rerank_scores", []),
-                        execution_time=metadata.get("executiontime", 0),
+                        execution_time=metadata.get("execution_time", 0),
                         error=metadata.get("error"),
                         prompt_mode=prompt_mode,
                     )
@@ -358,13 +424,13 @@ if prompt := st.chat_input("Posez votre question..."):
                     ),
                 )
 
-            # Afficher les sources collapsées (si disponibles)
-            if metadata and metadata.get("sources"):
-                with st.expander("📚 Voir les sources consultées", expanded=False):
-                    sources_html = format_sources(
-                        metadata["sources"], metadata["rerank_scores"]
-                    )
-                    st.markdown(sources_html, unsafe_allow_html=True)
+            # Sources détaillées (numérotées comme les citations de la réponse)
+            if metadata:
+                render_passages(
+                    metadata.get("passages", []),
+                    key_prefix=f"msg_{len(st.session_state.messages)}",
+                    no_relevant_docs=metadata.get("no_relevant_docs", False),
+                )
 
             # Ajouter à l'historique
             st.session_state.messages.append(
@@ -373,6 +439,10 @@ if prompt := st.chat_input("Posez votre question..."):
                     "content": full_response,
                     "sources": metadata.get("sources", []) if metadata else [],
                     "scores": metadata.get("rerank_scores", []) if metadata else [],
+                    "passages": metadata.get("passages", []) if metadata else [],
+                    "no_relevant_docs": (
+                        metadata.get("no_relevant_docs", False) if metadata else False
+                    ),
                     "query_id": query_id,
                 }
             )

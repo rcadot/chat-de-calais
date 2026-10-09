@@ -12,7 +12,7 @@ def format_timestamp(ts: str) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         return dt.strftime("%d/%m/%Y %H:%M:%S")
-    except:
+    except (ValueError, TypeError, KeyError):
         return ts
 
 
@@ -43,7 +43,7 @@ def view_recent(limit: int = 10):
                     sources = json.loads(q['sources'])
                     source_names = [Path(s).name for s in sources[:3]]
                     print(f"   📁 Sources: {', '.join(source_names)}")
-                except:
+                except (ValueError, TypeError, KeyError):
                     pass
             
             # Stats
@@ -103,7 +103,7 @@ def view_detail(query_id: int):
                 print(f"📁 SOURCES ({len(sources)}):")
                 for i, s in enumerate(sources, 1):
                     print(f"   {i}. {s}")
-            except:
+            except (ValueError, TypeError, KeyError):
                 pass
         
         if q['rerank_scores']:
@@ -113,7 +113,7 @@ def view_detail(query_id: int):
                 for i, score in enumerate(scores, 1):
                     if score is not None:
                         print(f"   {i}. {score:.4f}")
-            except:
+            except (ValueError, TypeError, KeyError):
                 pass
         
         if q['reranked_docs_details']:
@@ -125,7 +125,7 @@ def view_detail(query_id: int):
                     if doc.get('rerank_score'):
                         print(f"      Score: {doc['rerank_score']:.4f}")
                     print(f"      Extrait: {doc['content'][:150]}...")
-            except:
+            except (ValueError, TypeError, KeyError):
                 pass
 
 
