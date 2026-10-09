@@ -4,6 +4,52 @@
 
 Un système RAG intelligent permettant d'interroger une base documentaire à l'aide de l'intelligence artificielle, optimisé pour les administrations publiques françaises.
 
+## 🆕 Nouveautés de la version d'octobre 2026
+
+### Fond : qualité des réponses
+- Recherche hybride : sémantique (ChromaDB) et par mots-clés (BM25), fusionnées par RRF (`retrieval.py`). Elle retrouve les références exactes (articles, Cerfa, noms de communes).
+- Questions de suivi reformulées en questions autonomes à partir de l'historique.
+- Seuil de pertinence après le reranking Albert : sans passage pertinent, l'assistant l'indique et n'appelle pas le modèle.
+- Contexte élargi : chaque passage retenu est complété par ses voisins dans le document.
+- Citations numérotées `[1]`, `[2]` dans la réponse, en correspondance avec les sources affichées.
+- Documents similaires (`corpus.py`) : date de réunion et statut « validé » déduits des noms de dossiers et de fichiers, en-tête contextuel devant chaque passage, regroupement des passages quasi identiques (version validée la plus récente conservée, autres versions signalées « aussi dans »), au plus 2 passages par document.
+- HyDE désactivé par défaut (aucun gain mesuré, environ 15 s d'attente en plus par question).
+- Évaluation sur 55 questions (49 documentées, 6 hors sujet) : 49 sur 49 retrouvées, 6 sur 6 rejetées, MRR 0,97, 0,4 s par recherche. Sans recherche hybride, 18 % de succès. Sans rerank, aucune question hors sujet rejetée. Limite : questions écrites avec le vocabulaire des documents, ce qui avantage la recherche par mots-clés. Voir `evaluation/rapport_evaluation.md` et `evaluate.py`.
+
+### Documents et données
+- OCR par Albert (`openweight-ocr`, ou `mistral-ocr-2512` avec repli) des PDF scannés, des images insérées dans les pages de texte (10 à 85 % de la page) et des fichiers PNG, JPG, TIFF. Cache disque (`ocr_cache/`), nettoyage du texte (tableaux en Markdown, boucles de répétition supprimées).
+- Nouveaux formats : `.doc` (Word 97-2003, lu sans LibreOffice par `doc_reader.py`), `.eml` (corps et pièces jointes), `.md` (non indexé auparavant faute d'un paquet manquant). ODT lus sans pieds de page, commentaires ni texte supprimé du suivi des modifications.
+- Indexation plus robuste : fichier en échec retenté au lancement suivant, reliquats purgés, exclusion possible via `documents.exclure` (ex. ordres du jour).
+
+### Interface
+- Logo en haut de la barre latérale et en icône d'onglet (chat et tableau de bord des logs).
+- Statut animé pendant le traitement : étape en cours, détail, temps écoulé.
+- Sources en onglets numérotés comme les citations : extrait, date de réunion, statut de version, aperçu de la page PDF, téléchargement, pastilles de pertinence et d'OCR, mention « aussi dans ».
+- Filtres : « Versions validées uniquement » et « Filtrer par période » (désactivé par défaut pour ne pas écarter les documents sans date ou indexés récemment).
+- Documents déposés par glisser-déposer : valables pour la session seulement (base en mémoire), interrogés avec la base permanente ou seuls (« Interroger uniquement ces documents »).
+- Textes d'accueil et d'interface modifiables sans code.
+
+### Paramétrage
+- `parametres.yaml` : fichier unique commenté (sections `albert`, `documents`, `base`, `decoupage`, `recherche`, `ocr`, `interface`, `prompts`), validé au démarrage avec un message qui désigne la clé fautive.
+- `.env` réservé à `ALBERT_API_KEY` et aux surcharges ponctuelles (une variable d'environnement prime sur le YAML). `PROMPT_MODE` y devient inutile (`interface.mode_par_defaut`). Modèle fourni dans `.env.example`.
+
+### Code
+- Nouveaux modules : `corpus.py`, `retrieval.py`, `doc_reader.py`, `evaluate.py`.
+- Pipeline factorisé en générateur d'étapes (`rag_pipeline.iter_retrieval_steps`), réutilisé par l'interface, l'évaluation et le notebook. Rerank sans effet de bord, journalisation par `logging` au lieu de `print`, `main.py` corrigé (affichait des dictionnaires bruts).
+- Dépendances mises à jour dans `requirements.txt` et `requirements-dev.txt` (pip, pas de uv). Streamlit 1.52 au minimum.
+
+### Tests et intégration continue
+- 102 tests (1 ignoré), sans appel à Albert (API simulée). Nouveaux fichiers pour le corpus, l'OCR, les paramètres, la recherche, l'évaluation et la qualité du pipeline.
+- Intégration continue : GitHub Actions (`.github/workflows/tests.yml`) et GitLab CI (`.gitlab-ci.yml`).
+
+### Documentation
+- `README.md`, documentation technique Quarto (`docs/docs.qmd`, `docs/docs.html`), présentation (`docs/presentation.qmd`), notebook `exemple_pipeline.ipynb` exécuté, `dictionnaire_donnees.md`, `evaluation/rapport_evaluation.md`, notes de reprise `memory.md`.
+- Dépôt : `rag_logs.db` (questions réelles) et `.coverage` ne sont plus suivis par git, l'ancienne base vectorielle est ignorée.
+
+### Action requise après mise à jour
+- La base `chroma_db_rag/` a été indexée avant ces changements. Pour bénéficier des métadonnées de réunion, du regroupement des documents similaires et du nettoyage OCR, la réindexer complètement : vider le dossier en conservant `chroma_db_rag/ocr_cache/`, puis lancer `python main.py` (une vingtaine de secondes grâce au cache OCR).
+- Pistes ouvertes : meilleur modèle d'embeddings (la recherche sémantique seule n'atteint que 18 à 29 % de succès), questions de test formulées autrement, évaluation outillée de la fidélité des réponses.
+
 ## ✨ Fonctionnalités
 
 ### 🤖 Pipeline RAG Avancé
