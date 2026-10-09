@@ -22,19 +22,19 @@ def test_get_file_hash(temp_documents_dir):
     hash2 = get_file_hash(file_path)
     assert hash1 == hash2
 
-def test_scan_documents(temp_documents_dir):
+def test_scan_documents(temp_documents_dir, monkeypatch):
     """Test scan du dossier documents."""
     import config
-    import importlib
-    
-    # Override config pour tests
-    config.DOCUMENTS_DIR = temp_documents_dir
-    config.SUPPORTED_EXTENSIONS = ['.txt', '.md']
-    importlib.reload(config)
-    
+
+    # Surcharge après tout rechargement de config : sinon le scan porte sur
+    # ./documents (vide en intégration continue)
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", temp_documents_dir)
+    monkeypatch.setattr(config, "SUPPORTED_EXTENSIONS", [".txt", ".md"])
+
     files = scan_documents()
-    
+
     assert len(files) >= 2
+    assert all(os.path.dirname(f).startswith(temp_documents_dir) for f in files)
     assert all("hash" in meta for meta in files.values())
     assert all("size" in meta for meta in files.values())
 
